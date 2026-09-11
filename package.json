@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "check": "node --check extension/core.js && node --check extension/runtime.js && node --check extension/monitor.js && node --check extension/handoff.js && node --check extension/popup.js"
+    "check": "node --check extension/core.js && node --check extension/runtime.js && node --check extension/blackbox.js && node --check extension/monitor.js && node --check extension/handoff.js && node --check extension/popup.js"
   },
   "description": "Local-only ChatGPT page performance guard with self-yielding monitoring and safe window handoff.",
   "license": "MIT",
