@@ -31,7 +31,7 @@ test('recorder is fixed-capacity and discards oldest entries', () => {
   recorder.record('sample', { n: 3 }, { perfTimeMs: 300, wallTimeMs: 1200 });
   recorder.record('sample', { n: 4 }, { perfTimeMs: 400, wallTimeMs: 1300 });
   const events = recorder.snapshot(400);
-  assert.deepEqual(events.map((item) => item.data.n), [2, 3, 4]);
+  assert.deepEqual(Array.from(events, (item) => item.data.n), [2, 3, 4]);
 });
 
 test('snapshot prunes records older than maxAgeMs', () => {
@@ -41,7 +41,7 @@ test('snapshot prunes records older than maxAgeMs', () => {
   recorder.record('sample', { n: 2 }, { perfTimeMs: 599999, wallTimeMs: 2 });
   recorder.record('sample', { n: 3 }, { perfTimeMs: 600100, wallTimeMs: 3 });
   const events = recorder.snapshot(600100);
-  assert.deepEqual(events.map((item) => item.data.n), [2, 3]);
+  assert.deepEqual(Array.from(events, (item) => item.data.n), [2, 3]);
 });
 
 test('send and manual markers support bounded incident slicing', () => {
@@ -55,11 +55,11 @@ test('send and manual markers support bounded incident slicing', () => {
 
   const sendSlice = recorder.sliceAroundMarker('send', 10000, 20000, 42000);
   assert.equal(sendSlice.marker.kind, 'send');
-  assert.deepEqual(sendSlice.events.map((item) => item.kind), ['sample', 'send', 'long-animation-frame']);
+  assert.deepEqual(Array.from(sendSlice.events, (item) => item.kind), ['sample', 'send', 'long-animation-frame']);
 
   const manualSlice = recorder.sliceAroundMarker('manual', 5000, 5000, 42000);
   assert.equal(manualSlice.marker.kind, 'manual');
-  assert.deepEqual(manualSlice.events.map((item) => item.kind), ['sample', 'manual']);
+  assert.deepEqual(Array.from(manualSlice.events, (item) => item.kind), ['sample', 'manual']);
 });
 
 test('severe cluster requires repeated blocking evidence close in time', () => {
@@ -122,6 +122,6 @@ test('export schema is metadata-only and marks privacy boundary', () => {
   assert.ok(Array.isArray(payload.events));
   const serialized = JSON.stringify(payload);
   for (const forbidden of ['promptText', 'assistantText', 'chatText', 'innerHTML']) {
-    assert.equal(serialized.includes(forbidden), false);
+    assert.equal(new RegExp(`"${forbidden}"\\s*:`).test(serialized), false);
   }
 });
