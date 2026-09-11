@@ -25,6 +25,8 @@
   const DIAGNOSTIC_ITEMS = 60;
   const SEND_MARKER_DEDUPE_MS = 500;
   const BLACKBOX_SCROLL_SAMPLE_MS = 500;
+  const CHECKPOINT_INTERVAL_MS = 60 * 1000;
+  const CHECKPOINT_FAILURE_LIMIT = 3;
 
   const PerformanceObserverApi = globalThis.PerformanceObserver;
   const supportedEntryTypes = new Set(
@@ -53,6 +55,11 @@
   let lastBlockingAt = -Infinity;
   let lastSendMarkerAt = -Infinity;
   let lastBlackBoxScrollAt = -Infinity;
+  let lastCheckpointAt = -Infinity;
+  let lastCheckpointSignature = "";
+  let checkpointFailures = 0;
+  let checkpointSuspended = false;
+  let checkpointState = blackBox ? "memory-only" : "unavailable";
   let selfWorkMs = 0;
   let activityState = "quiet";
   let activeProbeSuppressed = true;
@@ -156,8 +163,105 @@
       lastManualMarker: blackBox.latestMarker("manual", now),
       severeClusterCount: clusters.length,
       latestSevereCluster: clusters.length ? clusters[clusters.length - 1] : null,
-      checkpointState: "memory-only"
+      checkpointState
     };
+  }
+
+  function requestExtensionMessage(message) {
+    if (!WebExt.runtime || typeof WebExt.runtime.sendMessage !== "function") {
+      return Promise.resolve(null);
+    }
+    try {
+      const result = WebExt.runtime.sendMessage(message);
+      return result && typeof result.then === "function"
+        ? result
+        : Promise.resolve(result || null);
+    } catch (_) {
+      return Promise.resolve(null);
+    }
+  }
+
+  function noteCheckpointFailure() {
+    checkpointFailures += 1;
+    checkpointState = "session-error";
+    if (checkpointFailures >= CHECKPOINT_FAILURE_LIMIT) {
+      checkpointSuspended = true;
+      checkpointState = "session-suspended";
+    }
+  }
+
+  function checkpointSignature(events) {
+    if (!events.length) return "";
+    const newest = events[events.length - 1];
+    return `${events.length}:${newest.wallTimeMs}:${newest.kind}`;
+  }
+
+  function maybeCheckpointBlackBox(now) {
+    if (!blackBox || checkpointSuspended || document.hidden) return;
+    if (activityState !== "quiet") return;
+    if (now - lastCheckpointAt < CHECKPOINT_INTERVAL_MS) return;
+
+    const events = blackBox.snapshot(now);
+    const signature = checkpointSignature(events);
+    if (!signature || signature === lastCheckpointSignature) return;
+
+    lastCheckpointAt = now;
+    const times = blackBoxTimes(now);
+    const checkpoint = {
+      schemaVersion: 1,
+      conversationId: currentConversationId(),
+      savedAt: times.wallTimeMs,
+      events
+    };
+
+    checkpointState = "session-saving";
+    requestExtensionMessage({ type: "saveBlackBoxCheckpoint", checkpoint })
+      .then((response) => {
+        if (!response || response.ok !== true) {
+          noteCheckpointFailure();
+          return;
+        }
+        checkpointFailures = 0;
+        lastCheckpointSignature = signature;
+        checkpointState = "session-saved";
+      })
+      .catch(() => {
+        noteCheckpointFailure();
+      });
+  }
+
+  function restoreBlackBoxCheckpoint() {
+    if (!blackBox || checkpointSuspended) return;
+    checkpointState = "session-loading";
+    requestExtensionMessage({ type: "loadBlackBoxCheckpoint" })
+      .then((response) => {
+        if (!response || response.ok !== true) {
+          if (response) noteCheckpointFailure();
+          else checkpointState = "memory-only";
+          return;
+        }
+        const checkpoint = response.checkpoint;
+        if (!checkpoint || !Array.isArray(checkpoint.events)) {
+          checkpointState = "session-empty";
+          return;
+        }
+        const currentId = currentConversationId();
+        if (currentId && checkpoint.conversationId && currentId !== checkpoint.conversationId) {
+          checkpointState = "session-mismatch";
+          return;
+        }
+        const now = performance.now();
+        const result = blackBox.restore(checkpoint.events, {
+          nowPerf: now,
+          wallTimeMs: blackBoxTimes(now).wallTimeMs
+        });
+        checkpointFailures = 0;
+        checkpointState = result.restored > 0 ? "session-restored" : "session-empty";
+        lastCheckpointSignature = checkpointSignature(blackBox.snapshot(now));
+      })
+      .catch(() => {
+        noteCheckpointFailure();
+      });
   }
 
   function activitySnapshot(now) {
@@ -645,6 +749,8 @@
       selfWorkMs: Math.round(selfWorkMs * 10) / 10,
       recentIncidents: incidents.values().slice(-12)
     };
+
+    maybeCheckpointBlackBox(now);
   }
 
   function currentConversationId() {
@@ -762,6 +868,7 @@
   observeMutations();
   installActivityListeners();
   applyOptimizationState();
+  restoreBlackBoxCheckpoint();
 
   setInterval(sampleDrift, DRIFT_INTERVAL_MS);
   setInterval(maybeRunActiveProbe, ACTIVE_PROBE_EVERY_MS);
