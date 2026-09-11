@@ -8,7 +8,7 @@ function loadCore() {
   const context = { globalThis: {} };
   context.globalThis = context;
   vm.createContext(context);
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'core.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'extension', 'core.js'), 'utf8'), context);
   return context.CGPTPerfCore;
 }
 

@@ -4,8 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const coreSource = fs.readFileSync(path.join(__dirname, '..', 'core.js'), 'utf8');
-const monitorSource = fs.readFileSync(path.join(__dirname, '..', 'monitor.js'), 'utf8');
+const coreSource = fs.readFileSync(path.join(__dirname, '..', 'extension', 'core.js'), 'utf8');
+const monitorSource = fs.readFileSync(path.join(__dirname, '..', 'extension', 'monitor.js'), 'utf8');
 
 function element() {
   return {

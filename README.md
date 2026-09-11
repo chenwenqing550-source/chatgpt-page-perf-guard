@@ -140,7 +140,7 @@ v1.6.1 的默认运行面刻意很窄：
 
 需要明确的是：Content Script 为了检测 DOM 结构，技术上能够读取匹配页面的 DOM。安全保证来自**源码最小化、无联网路径、自动安全测试和可审计发布包**，而不是“完全没有页面访问能力”这种不准确宣传。
 
-更多见 [SECURITY.md](SECURITY.md)。
+更多见 [security.md](docs/security.md)。
 
 ## 浏览器 / 系统兼容性
 
@@ -152,14 +152,14 @@ v1.6.1 的默认运行面刻意很窄：
 | Safari macOS | 🟡 需单独打包 | WebExtension 源码可作为输入，但需 Apple 的 Safari Web Extension packager / Xcode |
 | Firefox Android / Safari iOS | ⚪ 未宣称支持 | 尚未做触屏、移动布局及商店分发验收 |
 
-`content-visibility` 已进入较新的跨浏览器基线，但旧浏览器可能不支持；Long Animation Frame 仍不是所有主流浏览器都有，因此代码会运行时检测支持情况并降级。详见 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)。
+`content-visibility` 已进入较新的跨浏览器基线，但旧浏览器可能不支持；Long Animation Frame 仍不是所有主流浏览器都有，因此代码会运行时检测支持情况并降级。详见 [docs/compatibility.md](docs/compatibility.md)。
 
 ## 安装
 
 ### Chromium：开发者模式安装
 
 1. 下载 Release 中的 `chatgpt-page-perf-guard-v1.6.1-install.zip`。
-2. 解压到一个固定目录。
+2. 解压到一个固定目录。Release ZIP 的根目录直接包含扩展运行文件；仓库中的对应源文件位于 `extension/`，打包时归档其内部内容，不要把 `extension/` 目录再包一层。
 3. 打开 `chrome://extensions/` 或 `edge://extensions/`。
 4. 开启“开发者模式”。
 5. 选择“加载已解压的扩展程序”，指向解压目录。
@@ -195,20 +195,24 @@ npm run check
 
 ```text
 .
-├── manifest.json       # MV3 清单
-├── core.js             # 压力计算、状态机、历史 JSON 解析
-├── monitor.js          # 页面采样、DOM 识别、消息接口
-├── styles.css          # 屏外历史消息渲染优化
-├── popup.html/js/css   # 扩展面板
-├── tests/              # Node 内置测试
-├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── COMPATIBILITY.md
-│   ├── RELEASE_CHECKLIST.md
-│   └── images/
+├── .gitignore
+├── README.md
+├── LICENSE
 ├── CHANGELOG.md
-├── SECURITY.md
-└── LICENSE
+├── package.json
+├── extension/
+│   ├── manifest.json    # MV3 清单
+│   ├── core.js           # 压力计算、状态机、历史 JSON 解析
+│   ├── monitor.js        # 页面采样、DOM 识别、消息接口
+│   ├── styles.css        # 屏外历史消息渲染优化
+│   └── popup.html/js/css  # 扩展面板
+├── docs/
+│   ├── architecture.md
+│   ├── compatibility.md
+│   ├── release-checklist.md
+│   ├── security.md
+│   └── images/
+└── tests/                # Node 内置测试
 ```
 
 ## 已知限制
@@ -222,7 +226,7 @@ npm run check
 
 ## 发布策略
 
-版本遵循 SemVer。每次发布前必须：版本号一致、CHANGELOG 已更新、测试全绿、JS 语法检查通过、安全守卫通过、安装 ZIP 只包含运行所需文件、SHA-256 已记录。详细清单见 [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)。
+版本遵循 SemVer。每次发布前必须：版本号一致、CHANGELOG 已更新、测试全绿、JS 语法检查通过、安全守卫通过、安装 ZIP 只包含运行所需文件、SHA-256 已记录。详细清单见 [docs/release-checklist.md](docs/release-checklist.md)。
 
 v1.6.1 建议作为首个公开 **Pre-release**，在 Chrome/Edge/Firefox 实机收集兼容证据后再决定 Stable。
 
