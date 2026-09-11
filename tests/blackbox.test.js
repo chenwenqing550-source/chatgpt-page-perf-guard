@@ -37,7 +37,7 @@ test('recorder bounds capacity and prunes records older than the time window', (
 
   const events = recorder.events();
   assert.equal(events.length, 3);
-  assert.deepEqual(events.map((item) => item.value), [2, 3, 4]);
+  assert.deepEqual([...events.map((item) => item.value)], [2, 3, 4]);
   assert.equal(events.at(-1).wallTimeMs, 2_100);
   assert.equal(events.at(-1).perfTimeMs, 40);
 });
@@ -128,6 +128,6 @@ test('send-centered export slices before and after the latest send marker', () =
 
   const exported = recorder.exportAroundLatestMarker(['send'], 10_000, 20_000);
   assert.equal(exported.marker.kind, 'send');
-  assert.deepEqual(exported.events.map((item) => item.label).filter(Boolean), ['too-old', 'before', 'after']);
+  assert.deepEqual([...exported.events.map((item) => item.label).filter(Boolean)], ['too-old', 'before', 'after']);
   assert.equal(exported.events.some((item) => item.label === 'too-late'), false);
 });
