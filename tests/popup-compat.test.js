@@ -32,12 +32,24 @@ test('popup communicates through browser namespace when chrome is absent', async
     return elements.get(id);
   };
   let queryCalls = 0;
-  let sendCalls = 0;
+  const messages = [];
   const browser = {
     tabs: {
       async query() { queryCalls += 1; return [{ id: 7 }]; },
-      async sendMessage() {
-        sendCalls += 1;
+      async sendMessage(_tabId, message) {
+        messages.push(message);
+        if (message.type === 'getBlackBoxStatus') {
+          return {
+            ok: true,
+            status: {
+              eventCount: 0,
+              severeClusterCount: 0,
+              latestSevereCluster: null,
+              lastSendMarker: null,
+              checkpointState: 'session-empty'
+            }
+          };
+        }
         return {
           ok: true,
           metrics: {
@@ -85,6 +97,6 @@ test('popup communicates through browser namespace when chrome is absent', async
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(queryCalls, 1);
-  assert.equal(sendCalls, 1);
+  assert.deepEqual(messages.map((item) => item.type), ['getMetrics', 'getBlackBoxStatus']);
   assert.equal(getEl('pagePressure').textContent, '4%');
 });
