@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const root = path.join(__dirname, '..');
+const root = path.join(__dirname, '..', 'extension');
 const sourceFiles = ['core.js', 'monitor.js', 'popup.js'];
 
 test('manifest stays least-privilege and only injects into chatgpt.com', () => {

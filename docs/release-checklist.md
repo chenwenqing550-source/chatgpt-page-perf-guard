@@ -2,7 +2,7 @@
 
 每次 Tag / Release 前逐项完成：
 
-- [ ] `manifest.json`、Popup 页脚、CSS 注释、CHANGELOG 版本一致。
+- [ ] `extension/manifest.json`、Popup 页脚、CSS 注释、CHANGELOG 版本一致。
 - [ ] `npm test` 全绿。
 - [ ] `npm run check` 全绿。
 - [ ] 安全守卫确认无联网、持久化存储、Cookie、动态代码执行能力。
@@ -10,7 +10,7 @@
 - [ ] Chromium 实机加载已解压扩展，打开/刷新 ChatGPT 后 Popup 正常连接。
 - [ ] 长聊天优化开/关均可恢复，且不会删除正文。
 - [ ] 至少验证主 DOM 选择器；结构变化时 fallback/UNKNOWN 行为符合 Fail-Closed。
-- [ ] 安装 ZIP 仅包含：`manifest.json core.js monitor.js styles.css popup.html popup.css popup.js`。
+- [ ] 安装 ZIP 的根目录仅包含：`manifest.json core.js monitor.js styles.css popup.html popup.css popup.js`；打包源为 `extension/` 内部内容，不包含外层 `extension/` 目录。
 - [ ] 对安装 ZIP 计算 SHA-256 并写入 Release notes。
 - [ ] Tag、Release 标题、CHANGELOG 版本一致。
 - [ ] 兼容证据不足时使用 Pre-release，不标 Stable。
