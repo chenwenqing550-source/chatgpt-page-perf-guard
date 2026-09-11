@@ -34,6 +34,11 @@ test('quiet resumes only after stable window', () => {
   assert.equal(Runtime.classifyActivityState({ stableForMs: 3000 }), 'quiet');
 });
 
+test('recent interaction keeps runtime in protection window', () => {
+  assert.equal(Runtime.classifyActivityState({ interactionAgeMs: 300, stableForMs: 5000 }), 'busy');
+  assert.equal(Runtime.classifyActivityState({ interactionAgeMs: 3000, stableForMs: 5000 }), 'quiet');
+});
+
 test('mutation and scroll combine into busy state', () => {
   assert.equal(Runtime.classifyActivityState({ scrollActive: true, mutationRate: 8, stableForMs: 0 }), 'busy');
   assert.equal(Runtime.classifyActivityState({ mutationRate: 8, stableForMs: 0 }), 'generating');
