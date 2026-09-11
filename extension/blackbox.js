@@ -113,19 +113,45 @@
       kind: event.kind,
       perfTimeMs: event.perfTimeMs,
       wallTimeMs: event.wallTimeMs,
-      data: { ...event.data, ...(Array.isArray(event.data.scripts) ? { scripts: event.data.scripts.map((item) => ({ ...item })) } : {}) }
+      data: {
+        ...event.data,
+        ...(Array.isArray(event.data.scripts)
+          ? { scripts: event.data.scripts.map((item) => ({ ...item })) }
+          : {})
+      }
     };
   }
 
   function createRecorder(options = {}) {
     const capacity = Math.max(1, Math.floor(toFiniteNumber(options.capacity, DEFAULT_CAPACITY)));
     const maxAgeMs = Math.max(1000, toFiniteNumber(options.maxAgeMs, DEFAULT_MAX_AGE_MS));
-    const events = [];
+    const slots = new Array(capacity);
+    let head = 0;
+    let count = 0;
+
+    function physicalIndex(logicalIndex) {
+      return (head + logicalIndex) % capacity;
+    }
 
     function prune(nowPerf) {
       const cutoff = toFiniteNumber(nowPerf) - maxAgeMs;
-      while (events.length && events[0].perfTimeMs < cutoff) events.shift();
-      if (events.length > capacity) events.splice(0, events.length - capacity);
+      while (count > 0) {
+        const oldest = slots[head];
+        if (!oldest || oldest.perfTimeMs >= cutoff) break;
+        slots[head] = undefined;
+        head = (head + 1) % capacity;
+        count -= 1;
+      }
+    }
+
+    function append(event) {
+      if (count < capacity) {
+        slots[physicalIndex(count)] = event;
+        count += 1;
+        return;
+      }
+      slots[head] = event;
+      head = (head + 1) % capacity;
     }
 
     function record(kind, data = {}, timestamps = {}) {
@@ -136,8 +162,7 @@
         wallTimeMs: time.wallTimeMs,
         data: sanitizeData(data)
       };
-      events.push(event);
-      if (events.length > capacity) events.shift();
+      append(event);
       return copyEvent(event);
     }
 
@@ -150,11 +175,16 @@
     }
 
     function snapshot(nowPerf) {
+      const newest = count > 0 ? slots[physicalIndex(count - 1)] : null;
       const resolvedNow = Number.isFinite(Number(nowPerf))
         ? Number(nowPerf)
-        : (events.length ? events[events.length - 1].perfTimeMs : 0);
+        : (newest ? newest.perfTimeMs : 0);
       prune(resolvedNow);
-      return events.map(copyEvent);
+      const result = new Array(count);
+      for (let index = 0; index < count; index += 1) {
+        result[index] = copyEvent(slots[physicalIndex(index)]);
+      }
+      return result;
     }
 
     function latestMarker(markerKind, nowPerf) {
@@ -180,7 +210,9 @@
       const end = marker.perfTimeMs + Math.max(0, toFiniteNumber(afterMs));
       return {
         marker: copyEvent(marker),
-        events: current.filter((event) => event.perfTimeMs >= start && event.perfTimeMs <= end).map(copyEvent)
+        events: current
+          .filter((event) => event.perfTimeMs >= start && event.perfTimeMs <= end)
+          .map(copyEvent)
       };
     }
 
@@ -225,9 +257,10 @@
     }
 
     function buildExport(kind, context = {}) {
+      const current = snapshot(context.nowPerf);
       const nowPerf = Number.isFinite(Number(context.nowPerf))
         ? Number(context.nowPerf)
-        : (events.length ? events[events.length - 1].perfTimeMs : 0);
+        : (current.length ? current[current.length - 1].perfTimeMs : 0);
       let selected;
       let marker = null;
 
@@ -236,7 +269,7 @@
         marker = sliced.marker;
         selected = sliced.events;
       } else {
-        selected = snapshot(nowPerf);
+        selected = current;
       }
 
       const clusters = detectSevereClusters(nowPerf);
@@ -255,7 +288,7 @@
         },
         summary: {
           eventCount: selected.length,
-          totalBufferedEvents: snapshot(nowPerf).length,
+          totalBufferedEvents: current.length,
           severeClusterCount: clusters.length,
           latestSevereCluster: clusters.length ? { ...clusters[clusters.length - 1] } : null,
           marker: marker ? copyEvent(marker) : null
