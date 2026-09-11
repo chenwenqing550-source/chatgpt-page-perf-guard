@@ -40,6 +40,13 @@ test('background stores only bounded sanitized checkpoints in storage.session', 
   assert.match(background, /sender\.tab\.id/);
 });
 
+test('background preserves checkpoint time and re-sanitizes script source URLs', () => {
+  assert.match(background, /sanitizeSourceUrl/);
+  assert.match(background, /key\s*===\s*"sourceURL"/);
+  assert.match(background, /value\.savedAt/);
+  assert.match(background, /savedAt/);
+});
+
 test('monitor never accesses extension storage directly', () => {
   assert.doesNotMatch(monitor, /\.storage\b/);
   assert.match(monitor, /blackBoxCheckpoint/);
@@ -53,6 +60,12 @@ test('checkpointing is quiet-state gated, low-frequency and backs off on excessi
   assert.match(monitor, /activityState\s*!==\s*"quiet"/);
   assert.match(monitor, /checkpointDispatchMs/);
   assert.match(monitor, /checkpointBackoffUntil/);
+});
+
+test('checkpoint cannot overwrite stored evidence until restore has settled', () => {
+  assert.match(monitor, /restoreSettledConversationId/);
+  const body = functionBody('maybeCheckpointBlackBox');
+  assert.match(body, /restoreSettledConversationId\s*!==\s*conversationId/);
 });
 
 test('send and scroll handlers cannot send checkpoint messages', () => {
