@@ -9,12 +9,12 @@ const docs = path.join(root, 'docs');
 
 test('repository uses extension and docs directories', () => {
   assert.deepEqual(fs.readdirSync(extension).sort(), [
-    'core.js', 'handoff.js', 'manifest.json', 'monitor.js', 'popup.css', 'popup.html', 'popup.js', 'runtime.js', 'styles.css'
+    'blackbox.js', 'core.js', 'handoff.js', 'manifest.json', 'monitor.js', 'popup.css', 'popup.html', 'popup.js', 'runtime.js', 'styles.css'
   ]);
   for (const file of ['architecture.md', 'compatibility.md', 'release-checklist.md', 'security.md']) {
     assert.equal(fs.existsSync(path.join(docs, file)), true, file);
   }
-  for (const file of ['core.js', 'handoff.js', 'manifest.json', 'monitor.js', 'popup.css', 'popup.html', 'popup.js', 'runtime.js', 'styles.css', 'SECURITY.md']) {
+  for (const file of ['blackbox.js', 'core.js', 'handoff.js', 'manifest.json', 'monitor.js', 'popup.css', 'popup.html', 'popup.js', 'runtime.js', 'styles.css', 'SECURITY.md']) {
     assert.equal(fs.existsSync(path.join(root, file)), false, file);
   }
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
