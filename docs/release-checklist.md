@@ -1,23 +1,58 @@
-# 发布检查表
+# Release Checklist — v1.7.0
 
-每次 Tag / Release 前逐项完成：
+## Source / metadata
 
-- [ ] `extension/manifest.json`、Popup 页脚、CSS 注释、CHANGELOG 版本一致。
-- [ ] `npm test` 全绿。
-- [ ] `npm run check` 全绿。
-- [ ] 安全守卫确认无联网、持久化存储、Cookie、动态代码执行能力。
-- [ ] 检查 `git diff`，确认没有会话导出、Token、Cookie、私钥、`.env` 等敏感材料。
-- [ ] Chromium 实机加载已解压扩展，打开/刷新 ChatGPT 后 Popup 正常连接。
-- [ ] 长聊天优化开/关均可恢复，且不会删除正文。
-- [ ] 至少验证主 DOM 选择器；结构变化时 fallback/UNKNOWN 行为符合 Fail-Closed。
-- [ ] 安装 ZIP 的根目录仅包含：`manifest.json core.js monitor.js styles.css popup.html popup.css popup.js`；打包源为 `extension/` 内部内容，不包含外层 `extension/` 目录。
-- [ ] 对安装 ZIP 计算 SHA-256 并写入 Release notes。
-- [ ] Tag、Release 标题、CHANGELOG 版本一致。
-- [ ] 兼容证据不足时使用 Pre-release，不标 Stable。
+- [ ] `extension/manifest.json` version = `1.7.0`.
+- [ ] `package.json` version = `1.7.0`.
+- [ ] Popup footer = `v1.7.0`.
+- [ ] README current install guidance only points to v1.7.0.
+- [ ] v1.6.x appears only in historical changelog/release history, not as recommended baseline.
 
-## v1.6.1 首发额外验收
+## Static / automated verification
 
-- [ ] Chrome / Edge 最新稳定版至少一项真实运行。
-- [ ] Firefox 最新稳定版做 browser namespace / Popup 消息实测。
-- [ ] 若发 Firefox AMO 包，使用专用 manifest 补 `gecko.id` 与 `data_collection_permissions`。
-- [ ] Safari 只有完成 Xcode 打包和实机验收后才声明支持。
+- [ ] `npm test` PASS.
+- [ ] `npm run check` PASS.
+- [ ] Security guard confirms no network, persistent storage, cookie or dynamic-code APIs.
+- [ ] Handoff guard confirms no auto click/submit/KeyboardEvent/window.open.
+- [ ] Lifecycle tests cover background, scrolling, generating, busy, interaction guard and bounded ring buffer.
+- [ ] Render guard confirms only explicit cold turns receive `content-visibility`.
+
+## Browser behavior
+
+Run in Chrome/Edge with a long ChatGPT conversation:
+
+- [ ] Send a message while the page is already long: extension enters protection/busy state immediately.
+- [ ] During answer generation and tool-card growth: active probe shows “已让路”.
+- [ ] Generate while rapidly scrolling: no bulk coverage/layout scan is triggered.
+- [ ] Last two turns and currently growing turn never receive cold optimization.
+- [ ] A far historical turn only becomes cold after it is confirmed outside the preheat area and stable.
+- [ ] Returning near viewport preheats/removes cold state before the content reaches the visible region.
+- [ ] Background tab stops nonessential active work.
+- [ ] Recent incident/self-work diagnostics contain numbers/status only, no chat body.
+
+## A/B acceptance against previous public build
+
+Use the same long conversation and similar interaction sequence:
+
+- [ ] Compare “send moment” jank.
+- [ ] Compare generation/tool-card jank.
+- [ ] Compare fast-scroll jank.
+- [ ] Compare whether refresh is still required to restore smoothness.
+- [ ] Confirm v1.7.0 does not introduce scroll jumps or missing content.
+
+Do not call the performance change proven until real-browser A/B evidence exists.
+
+## Handoff
+
+- [ ] “准备换窗交接” fills the composer only.
+- [ ] It never sends automatically.
+- [ ] Prompt includes CURRENT/VERIFIED/PENDING/BLOCKED/HISTORICAL/REJECTED.
+- [ ] Prompt protects repo/branch/exact SHA/version/test result/next step/Stop Rule.
+- [ ] Handoff is described as new-window transfer, not server-side context compression.
+
+## Release surface
+
+- [ ] Merge verified candidate to `main`.
+- [ ] Publish v1.7.0 package/release.
+- [ ] Only after v1.7.0 is available, mark/remove v1.6.1 public release from the recommended surface.
+- [ ] Never delete Git history needed for audit/recovery.
