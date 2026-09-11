@@ -23,6 +23,10 @@
   const BLACK_BOX_MAX_ITEMS = 900;
   const BLACK_BOX_SCROLL_SAMPLE_MS = 250;
   const SEND_DEDUPE_MS = 250;
+  const BLACK_BOX_CHECKPOINT_MS = 30000;
+  const BLACK_BOX_CHECKPOINT_BACKOFF_MS = 120000;
+  const BLACK_BOX_CHECKPOINT_BUDGET_MS = 8;
+  const BLACK_BOX_CHECKPOINT_MAX_ITEMS = 600;
 
   function createNoopBlackBoxRecorder() {
     return Object.freeze({
@@ -73,6 +77,17 @@
   let activityState = "quiet";
   let activeProbeSuppressed = true;
   let turnObserver = null;
+
+  let lastCheckpointAt = -Infinity;
+  let checkpointBackoffUntil = -Infinity;
+  let checkpointDispatchMs = 0;
+  let checkpointInFlight = false;
+  let checkpointAvailable = false;
+  let checkpointStatus = "not-restored";
+  let restoreAttemptedConversationId = null;
+  let pendingSevereCheckpoint = false;
+  let severeWindowStart = -Infinity;
+  let severeWindowCount = 0;
 
   const blockingSamples = [];
   const frameSamples = [];
@@ -132,6 +147,16 @@
       return blackBox.mark(kind, details);
     } catch (_) {
       return null;
+    }
+  }
+
+  function sendRuntimeMessage(message) {
+    try {
+      const result = WebExt.runtime.sendMessage(message);
+      if (result && typeof result.then === "function") return result;
+      return Promise.resolve(result || null);
+    } catch (_) {
+      return Promise.resolve(null);
     }
   }
 
@@ -255,6 +280,17 @@
     return node.closest("[data-message-author-role]");
   }
 
+  function noteSevereBlocking(eventTime, duration) {
+    if (duration < 100) return;
+    if (eventTime - severeWindowStart > 2000) {
+      severeWindowStart = eventTime;
+      severeWindowCount = 1;
+    } else {
+      severeWindowCount += 1;
+    }
+    if (duration >= 250 || severeWindowCount >= 3) pendingSevereCheckpoint = true;
+  }
+
   function observeBlocking() {
     if (!PerformanceObserverApi) return;
     const type = supportsLoAF ? "long-animation-frame" : supportsLongTask ? "longtask" : null;
@@ -268,9 +304,9 @@
           const eventTime = entry.startTime + duration;
           blockingSamples.push({ time: eventTime, duration });
           lastBlockingAt = Math.max(lastBlockingAt, eventTime);
+          noteSevereBlocking(eventTime, duration);
 
           if (type === "long-animation-frame" && BlackBox && typeof BlackBox.sanitizeLoafEntry === "function") {
-            // sanitizeLoafEntry preserves browser-provided styleAndLayoutStart and script forcedStyleAndLayoutDuration.
             safeBlackBoxRecord(BlackBox.sanitizeLoafEntry(entry, {
               wallTimeMs: wallTimeForPerf(eventTime),
               perfTimeMs: eventTime,
@@ -539,6 +575,93 @@
     };
   }
 
+  function currentConversationId() {
+    const match = location.pathname.match(/\/c\/([0-9a-f-]{36})/i);
+    return match ? match[1] : null;
+  }
+
+  function maybeRestoreBlackBox() {
+    if (!blackBoxAvailable || document.hidden || activityState !== "quiet") return;
+    const conversationId = currentConversationId();
+    if (!conversationId || restoreAttemptedConversationId === conversationId) return;
+    restoreAttemptedConversationId = conversationId;
+    checkpointStatus = "restoring";
+
+    sendRuntimeMessage({ type: "blackBoxRestore" }).then((response) => {
+      const snapshot = response && response.ok ? response.snapshot : null;
+      if (!snapshot) {
+        checkpointStatus = response && response.ok ? "empty" : "unavailable";
+        return;
+      }
+      if (snapshot.conversationId !== conversationId) {
+        checkpointStatus = "conversation-mismatch";
+        return;
+      }
+      try {
+        blackBox.hydrate(snapshot.events);
+        checkpointAvailable = true;
+        checkpointStatus = "restored";
+      } catch (_) {
+        checkpointStatus = "restore-failed";
+      }
+    }, () => {
+      checkpointStatus = "unavailable";
+    });
+  }
+
+  function maybeCheckpointBlackBox(now) {
+    if (!blackBoxAvailable || document.hidden || activityState !== "quiet") return;
+    if (checkpointInFlight || now < checkpointBackoffUntil) return;
+    const conversationId = currentConversationId();
+    if (!conversationId || restoreAttemptedConversationId !== conversationId) return;
+    const due = pendingSevereCheckpoint || now - lastCheckpointAt >= BLACK_BOX_CHECKPOINT_MS;
+    if (!due) return;
+
+    let events;
+    try {
+      events = blackBox.events().slice(-BLACK_BOX_CHECKPOINT_MAX_ITEMS);
+    } catch (_) {
+      checkpointStatus = "snapshot-failed";
+      checkpointBackoffUntil = now + BLACK_BOX_CHECKPOINT_BACKOFF_MS;
+      return;
+    }
+    if (!events.length) return;
+
+    const dispatchStarted = performance.now();
+    const task = sendRuntimeMessage({
+      type: "blackBoxCheckpoint",
+      snapshot: {
+        schemaVersion: "1.0",
+        conversationId,
+        savedAt: Date.now(),
+        events
+      }
+    });
+    checkpointDispatchMs = Math.max(0, performance.now() - dispatchStarted);
+    if (checkpointDispatchMs > BLACK_BOX_CHECKPOINT_BUDGET_MS) {
+      checkpointBackoffUntil = now + BLACK_BOX_CHECKPOINT_BACKOFF_MS;
+    }
+    checkpointInFlight = true;
+    checkpointStatus = "saving";
+
+    Promise.resolve(task).then((response) => {
+      checkpointInFlight = false;
+      if (response && response.ok) {
+        lastCheckpointAt = performance.now();
+        checkpointAvailable = true;
+        checkpointStatus = "saved";
+        pendingSevereCheckpoint = false;
+      } else {
+        checkpointStatus = "save-failed";
+        checkpointBackoffUntil = Math.max(checkpointBackoffUntil, performance.now() + BLACK_BOX_CHECKPOINT_BACKOFF_MS);
+      }
+    }, () => {
+      checkpointInFlight = false;
+      checkpointStatus = "save-failed";
+      checkpointBackoffUntil = Math.max(checkpointBackoffUntil, performance.now() + BLACK_BOX_CHECKPOINT_BACKOFF_MS);
+    });
+  }
+
   function updateMetrics() {
     const workStarted = performance.now();
     const now = workStarted;
@@ -616,6 +739,9 @@
       optimizationEnabled
     });
 
+    maybeRestoreBlackBox();
+    maybeCheckpointBlackBox(now);
+
     selfWorkMs = Math.max(selfWorkMs, performance.now() - workStarted);
     incidents.push({
       time: Math.round(now),
@@ -655,11 +781,6 @@
     };
   }
 
-  function currentConversationId() {
-    const match = location.pathname.match(/\/c\/([0-9a-f-]{36})/i);
-    return match ? match[1] : null;
-  }
-
   function calibrationForCurrentWindow() {
     if (!historyCalibration) return null;
     const currentId = currentConversationId();
@@ -689,7 +810,9 @@
       latestSendWallTimeMs: latestSend ? latestSend.wallTimeMs : null,
       latestManualWallTimeMs: latestManual ? latestManual.wallTimeMs : null,
       latestCluster: clusters.length ? clusters[clusters.length - 1] : null,
-      sessionCheckpoint: "not-configured"
+      sessionCheckpoint: checkpointStatus,
+      checkpointAvailable,
+      checkpointDispatchMs: Math.round(checkpointDispatchMs * 10) / 10
     };
   }
 
@@ -719,7 +842,8 @@
         eventCount: slice.events.length,
         marker: slice.marker,
         severeClusterCount: clusters.length,
-        latestSevereCluster: clusters.length ? clusters[clusters.length - 1] : null
+        latestSevereCluster: clusters.length ? clusters[clusters.length - 1] : null,
+        sessionCheckpoint: checkpointStatus
       },
       events: slice.events
     };
@@ -792,6 +916,7 @@
         activityState,
         optimizationEnabled
       });
+      pendingSevereCheckpoint = true;
       sendResponse({ ok: true, status: blackBoxStatus() });
       return true;
     }
