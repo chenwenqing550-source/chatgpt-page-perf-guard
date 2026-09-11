@@ -118,7 +118,7 @@
   }
 
   function createRecorder(options = {}) {
-    const capacity = Math.max(8, Math.floor(toFiniteNumber(options.capacity, DEFAULT_CAPACITY)));
+    const capacity = Math.max(1, Math.floor(toFiniteNumber(options.capacity, DEFAULT_CAPACITY)));
     const maxAgeMs = Math.max(1000, toFiniteNumber(options.maxAgeMs, DEFAULT_MAX_AGE_MS));
     const events = [];
 
