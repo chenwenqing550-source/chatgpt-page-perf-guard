@@ -5,6 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const coreSource = fs.readFileSync(path.join(__dirname, '..', 'extension', 'core.js'), 'utf8');
+const runtimeSource = fs.readFileSync(path.join(__dirname, '..', 'extension', 'runtime.js'), 'utf8');
 const monitorSource = fs.readFileSync(path.join(__dirname, '..', 'extension', 'monitor.js'), 'utf8');
 
 function element() {
@@ -26,17 +27,24 @@ function makeContext({ includePerformanceObserver = true, namespace = 'browser' 
     }
   };
   const root = element();
+  class MutationObserver {
+    constructor() {}
+    observe() {}
+    disconnect() {}
+  }
   const context = {
     console,
     performance: { now: () => 1000 },
     document: {
       hidden: false,
+      readyState: 'complete',
       documentElement: root,
       querySelectorAll: () => [],
       addEventListener() {}
     },
     window: { innerHeight: 800 },
     location: { pathname: '/c/12345678-1234-1234-1234-123456789abc' },
+    MutationObserver,
     requestAnimationFrame() {},
     setInterval() { return 1; },
     clearInterval() {},
@@ -55,6 +63,7 @@ function makeContext({ includePerformanceObserver = true, namespace = 'browser' 
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(coreSource, context);
+  vm.runInContext(runtimeSource, context);
   return { context, getListener: () => listener };
 }
 
@@ -88,7 +97,6 @@ test('history calibration keeps unknown assetCount as null across runtime messag
   assert.equal(response.ok, true);
   assert.equal(response.calibration.assetCount, null);
 });
-
 
 test('history calibration treats non-numeric assetCount as unknown', () => {
   const { context, getListener } = makeContext({ includePerformanceObserver: true, namespace: 'browser' });
