@@ -26,13 +26,14 @@
     toggle: document.getElementById("optimizationToggle"),
     prepareHandoff: document.getElementById("prepareHandoffButton"),
     handoffStatus: document.getElementById("handoffStatus"),
+    blackBoxStatus: document.getElementById("blackBoxStatus"),
     blackBoxEventCount: document.getElementById("blackBoxEventCount"),
     blackBoxCheckpointState: document.getElementById("blackBoxCheckpointState"),
     blackBoxLastSend: document.getElementById("blackBoxLastSend"),
     blackBoxCluster: document.getElementById("blackBoxCluster"),
     exportSendIncidentButton: document.getElementById("exportSendIncidentButton"),
     exportRecentBlackBoxButton: document.getElementById("exportRecentBlackBoxButton"),
-    markBlackBoxIncidentButton: document.getElementById("markBlackBoxIncidentButton"),
+    markIncidentButton: document.getElementById("markIncidentButton"),
     blackBoxActionStatus: document.getElementById("blackBoxActionStatus"),
     activityState: document.getElementById("activityState"),
     probeState: document.getElementById("probeState"),
@@ -153,7 +154,7 @@
   function setBlackBoxActionsDisabled(disabled) {
     els.exportSendIncidentButton.disabled = disabled;
     els.exportRecentBlackBoxButton.disabled = disabled;
-    els.markBlackBoxIncidentButton.disabled = disabled;
+    els.markIncidentButton.disabled = disabled;
   }
 
   function setBlackBoxActionStatus(text, bad = false) {
@@ -165,6 +166,7 @@
   function renderBlackBoxStatus(status) {
     if (!status) {
       blackBoxAvailable = false;
+      els.blackBoxStatus.textContent = "诊断状态不可用";
       els.blackBoxEventCount.textContent = "UNKNOWN";
       els.blackBoxCheckpointState.textContent = "UNKNOWN";
       els.blackBoxLastSend.textContent = "UNKNOWN";
@@ -174,7 +176,10 @@
     }
 
     blackBoxAvailable = true;
-    els.blackBoxEventCount.textContent = String(Number(status.eventCount) || 0);
+    const eventCount = Number(status.eventCount) || 0;
+    const clusterCount = Number(status.severeClusterCount) || 0;
+    els.blackBoxStatus.textContent = `事件 ${eventCount} · 严重事件簇 ${clusterCount}`;
+    els.blackBoxEventCount.textContent = String(eventCount);
     els.blackBoxCheckpointState.textContent = checkpointLabel(status.checkpointState);
     els.blackBoxLastSend.textContent = markerAgeLabel(status.lastSendMarker);
 
@@ -182,7 +187,7 @@
     if (cluster) {
       const count = Number(cluster.count) || 0;
       const maxDuration = Math.round(Number(cluster.maxDuration) || 0);
-      els.blackBoxCluster.textContent = `${Number(status.severeClusterCount) || 1} 组 · 最近 ${count} 次 / 峰值 ${maxDuration} ms`;
+      els.blackBoxCluster.textContent = `${clusterCount || 1} 组 · 最近 ${count} 次 / 峰值 ${maxDuration} ms`;
     } else {
       els.blackBoxCluster.textContent = "暂无严重事件簇";
     }
@@ -396,10 +401,7 @@
     const anchor = document.createElement("a");
     anchor.href = url;
     anchor.download = blackBoxFileName(kind);
-    anchor.style.display = "none";
-    document.body.appendChild(anchor);
     anchor.click();
-    anchor.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
@@ -410,6 +412,9 @@
       const response = await send("exportBlackBox", { kind });
       if (!response || !response.ok || !response.payload) {
         throw new Error(response && response.error ? response.error : "导出失败");
+      }
+      if (kind === "send" && !(response.payload.summary && response.payload.summary.marker)) {
+        throw new Error("暂无发送标记，请先正常发送一条消息后再导出");
       }
       downloadBlackBoxPayload(response.payload, kind);
       const count = response.payload.summary && Number(response.payload.summary.eventCount);
@@ -433,15 +438,15 @@
     }
   });
 
-  els.exportSendIncidentButton.addEventListener("click", () => {
-    exportBlackBox("send");
+  els.exportSendIncidentButton.addEventListener("click", async () => {
+    await exportBlackBox("send");
   });
 
-  els.exportRecentBlackBoxButton.addEventListener("click", () => {
-    exportBlackBox("recent");
+  els.exportRecentBlackBoxButton.addEventListener("click", async () => {
+    await exportBlackBox("recent");
   });
 
-  els.markBlackBoxIncidentButton.addEventListener("click", async () => {
+  els.markIncidentButton.addEventListener("click", async () => {
     setBlackBoxActionsDisabled(true);
     setBlackBoxActionStatus("正在标记当前卡顿现场…");
     try {
@@ -450,7 +455,7 @@
         throw new Error(response && response.error ? response.error : "标记失败");
       }
       renderBlackBoxStatus(response.status);
-      setBlackBoxActionStatus("已标记。恢复后可导出最近现场。 ");
+      setBlackBoxActionStatus("已标记。恢复后可导出最近现场。");
     } catch (error) {
       setBlackBoxActionStatus(`标记失败：${error && error.message ? error.message : "UNKNOWN"}`, true);
     } finally {
@@ -515,10 +520,11 @@
     }
   });
 
-  refresh().finally(() => {
-    refreshBlackBoxStatus();
-    refreshTimer = setInterval(refresh, 2000);
-  });
+  refresh()
+    .then(() => refreshBlackBoxStatus())
+    .finally(() => {
+      refreshTimer = setInterval(refresh, 2000);
+    });
 
   window.addEventListener("unload", () => {
     if (refreshTimer) clearInterval(refreshTimer);
