@@ -8,15 +8,16 @@ const html = fs.readFileSync(path.join(extension, 'popup.html'), 'utf8');
 const popup = fs.readFileSync(path.join(extension, 'popup.js'), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(path.join(extension, 'manifest.json'), 'utf8'));
 
-test('popup exposes compact diagnostic black box status and three explicit actions', () => {
+test('popup exposes one compact black-box card with detailed status and three explicit actions', () => {
   for (const id of [
+    'blackBoxStatus',
     'blackBoxEventCount',
     'blackBoxCheckpointState',
     'blackBoxLastSend',
     'blackBoxCluster',
     'exportSendIncidentButton',
     'exportRecentBlackBoxButton',
-    'markBlackBoxIncidentButton',
+    'markIncidentButton',
     'blackBoxActionStatus'
   ]) {
     assert.match(html, new RegExp(`id=["']${id}["']`), id);
