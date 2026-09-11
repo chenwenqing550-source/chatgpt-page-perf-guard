@@ -3,6 +3,7 @@
 
   const Core = globalThis.CGPTPerfCore;
   const Runtime = globalThis.CGPTPerfRuntime;
+  const BlackBox = globalThis.CGPTPerfBlackBox;
   if (!Core || !Runtime) return;
 
   const WebExt = globalThis.browser || globalThis.chrome;
@@ -18,6 +19,28 @@
   const MUTATION_WINDOW_MS = 1000;
   const SCROLL_ACTIVE_MS = 700;
   const DIAGNOSTIC_ITEMS = 60;
+  const BLACK_BOX_WINDOW_MS = 10 * 60 * 1000;
+  const BLACK_BOX_MAX_ITEMS = 900;
+  const BLACK_BOX_SCROLL_SAMPLE_MS = 250;
+  const SEND_DEDUPE_MS = 250;
+
+  function createNoopBlackBoxRecorder() {
+    return Object.freeze({
+      record: () => null,
+      mark: () => null,
+      hydrate: () => 0,
+      events: () => [],
+      latestMarker: () => null,
+      findSevereClusters: () => [],
+      exportRecent: () => ({ marker: null, events: [] }),
+      exportAroundLatestMarker: () => ({ marker: null, events: [] })
+    });
+  }
+
+  const blackBoxAvailable = Boolean(BlackBox && typeof BlackBox.createRecorder === "function");
+  const blackBox = blackBoxAvailable
+    ? BlackBox.createRecorder({ maxItems: BLACK_BOX_MAX_ITEMS, windowMs: BLACK_BOX_WINDOW_MS })
+    : createNoopBlackBoxRecorder();
 
   const PerformanceObserverApi = globalThis.PerformanceObserver;
   const supportedEntryTypes = new Set(
@@ -44,6 +67,8 @@
   let lastInteractionAt = -Infinity;
   let lastMutationAt = -Infinity;
   let lastBlockingAt = -Infinity;
+  let lastSendMarkerAt = -Infinity;
+  let lastBlackBoxScrollAt = -Infinity;
   let selfWorkMs = 0;
   let activityState = "quiet";
   let activeProbeSuppressed = true;
@@ -87,6 +112,28 @@
     selfWorkMs: 0,
     recentIncidents: []
   };
+
+  function wallTimeForPerf(perfTime) {
+    const origin = Number(performance.timeOrigin);
+    if (Number.isFinite(origin)) return Math.round(origin + Number(perfTime || 0));
+    return Math.round(Date.now() - performance.now() + Number(perfTime || 0));
+  }
+
+  function safeBlackBoxRecord(event) {
+    try {
+      return blackBox.record(event);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function safeBlackBoxMark(kind, details) {
+    try {
+      return blackBox.mark(kind, details);
+    } catch (_) {
+      return null;
+    }
+  }
 
   function pruneArray(samples, now, maxAge = WINDOW_MS) {
     while (samples.length && now - samples[0].time > maxAge) samples.shift();
@@ -221,6 +268,26 @@
           const eventTime = entry.startTime + duration;
           blockingSamples.push({ time: eventTime, duration });
           lastBlockingAt = Math.max(lastBlockingAt, eventTime);
+
+          if (type === "long-animation-frame" && BlackBox && typeof BlackBox.sanitizeLoafEntry === "function") {
+            // sanitizeLoafEntry preserves browser-provided styleAndLayoutStart and script forcedStyleAndLayoutDuration.
+            safeBlackBoxRecord(BlackBox.sanitizeLoafEntry(entry, {
+              wallTimeMs: wallTimeForPerf(eventTime),
+              perfTimeMs: eventTime,
+              optimizationEnabled,
+              activityState
+            }));
+          } else {
+            safeBlackBoxRecord({
+              kind: type,
+              wallTimeMs: wallTimeForPerf(eventTime),
+              perfTimeMs: eventTime,
+              duration: Math.round(duration * 10) / 10,
+              optimizationEnabled,
+              activityState
+            });
+          }
+
           if (duration >= 50) incidents.push({
             time: Math.round(eventTime),
             kind: type,
@@ -251,6 +318,17 @@
           const existing = interactionSamples.get(interactionId);
           if (!existing || duration > existing.duration) {
             interactionSamples.set(interactionId, { time: eventTime, duration });
+          }
+          if (duration >= 80) {
+            safeBlackBoxRecord({
+              kind: "event-timing",
+              wallTimeMs: wallTimeForPerf(eventTime),
+              perfTimeMs: eventTime,
+              duration: Math.round(duration * 10) / 10,
+              interactionId,
+              activityState,
+              optimizationEnabled
+            });
           }
         }
         pruneInteractions(now);
@@ -295,15 +373,35 @@
     lastInteractionAt = performance.now();
   }
 
+  function markSend(details) {
+    const now = performance.now();
+    lastInteractionAt = now;
+    if (now - lastSendMarkerAt < SEND_DEDUPE_MS) return;
+    lastSendMarkerAt = now;
+    safeBlackBoxMark("send", { ...details, wallTimeMs: wallTimeForPerf(now), perfTimeMs: now, activityState, optimizationEnabled });
+  }
+
   function markScroll() {
-    lastScrollAt = performance.now();
+    const now = performance.now();
+    lastScrollAt = now;
+    if (now - lastBlackBoxScrollAt < BLACK_BOX_SCROLL_SAMPLE_MS) return;
+    lastBlackBoxScrollAt = now;
+    const scrollY = Number(globalThis.scrollY);
+    safeBlackBoxMark("scroll", { wallTimeMs: wallTimeForPerf(now), perfTimeMs: now, scrollY: Number.isFinite(scrollY) ? Math.round(scrollY) : null, activityState, optimizationEnabled });
   }
 
   function installActivityListeners() {
     const passive = { passive: true, capture: true };
-    for (const type of ["pointerdown", "keydown", "input", "submit", "click"]) {
+    for (const type of ["pointerdown", "input", "click"]) {
       document.addEventListener(type, markInteraction, passive);
     }
+    document.addEventListener("keydown", (event) => {
+      markInteraction();
+      if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !event.isComposing) {
+        markSend({ source: "enter" });
+      }
+    }, passive);
+    document.addEventListener("submit", () => markSend({ source: "submit" }), passive);
     for (const type of ["wheel", "touchmove", "scroll"]) {
       document.addEventListener(type, markScroll, passive);
     }
@@ -502,13 +600,29 @@
       1 +
       Number(supportsEventTiming);
 
+    const currentMutationRate = mutationRate(now);
+    const preBlackBoxWorkMs = Math.max(0, performance.now() - workStarted);
+    safeBlackBoxRecord({
+      kind: "sample",
+      wallTimeMs: wallTimeForPerf(now),
+      perfTimeMs: now,
+      activityState,
+      pagePressure,
+      mutationRate: currentMutationRate,
+      selfWorkMs: Math.round(preBlackBoxWorkMs * 10) / 10,
+      blockingRatio: signals.blockingRatio == null ? null : Math.round(signals.blockingRatio * 1000) / 10,
+      eventLatencyMs: signals.eventLatencyMs == null ? null : Math.round(signals.eventLatencyMs),
+      loadedBlocks,
+      optimizationEnabled
+    });
+
     selfWorkMs = Math.max(selfWorkMs, performance.now() - workStarted);
     incidents.push({
       time: Math.round(now),
       kind: "sample",
       activityState,
       pagePressure,
-      mutationRate: mutationRate(now),
+      mutationRate: currentMutationRate,
       selfWorkMs: Math.round(selfWorkMs * 10) / 10,
       optimizationEnabled
     });
@@ -553,6 +667,61 @@
       ...historyCalibration,
       matchesCurrentConversation:
         Boolean(currentId) && Boolean(historyCalibration.conversationId) && currentId === historyCalibration.conversationId
+    };
+  }
+
+  function blackBoxStatus() {
+    let events = [];
+    let clusters = [];
+    let latestSend = null;
+    let latestManual = null;
+    try {
+      events = blackBox.events();
+      clusters = blackBox.findSevereClusters();
+      latestSend = blackBox.latestMarker(["send"]);
+      latestManual = blackBox.latestMarker(["manual-jank"]);
+    } catch (_) {
+      // Diagnostics must never break the primary monitor.
+    }
+    return {
+      available: blackBoxAvailable,
+      eventCount: events.length,
+      latestSendWallTimeMs: latestSend ? latestSend.wallTimeMs : null,
+      latestManualWallTimeMs: latestManual ? latestManual.wallTimeMs : null,
+      latestCluster: clusters.length ? clusters[clusters.length - 1] : null,
+      sessionCheckpoint: "not-configured"
+    };
+  }
+
+  function buildBlackBoxExport(mode) {
+    const captureWindow = mode === "send" || mode === "manual" ? mode : "recent";
+    let slice = { marker: null, events: [] };
+    if (captureWindow === "send") slice = blackBox.exportAroundLatestMarker(["send"], 10_000, 20_000);
+    else if (captureWindow === "manual") slice = blackBox.exportAroundLatestMarker(["manual-jank"], 30_000, 30_000);
+    else slice = blackBox.exportRecent(Date.now());
+
+    const clusters = blackBox.findSevereClusters();
+    return {
+      schemaVersion: "1.0",
+      exportedAt: new Date().toISOString(),
+      pageTimeOrigin: Number.isFinite(Number(performance.timeOrigin))
+        ? new Date(Number(performance.timeOrigin)).toISOString()
+        : null,
+      conversationId: currentConversationId(),
+      optimizationEnabled,
+      captureWindow,
+      privacy: {
+        containsChatText: false,
+        localOnly: true,
+        networkUpload: false
+      },
+      summary: {
+        eventCount: slice.events.length,
+        marker: slice.marker,
+        severeClusterCount: clusters.length,
+        latestSevereCluster: clusters.length ? clusters[clusters.length - 1] : null
+      },
+      events: slice.events
     };
   }
 
@@ -606,6 +775,33 @@
       applyOptimizationState();
       latest = { ...latest, optimizationEnabled };
       sendResponse({ ok: true, metrics: latest });
+      return true;
+    }
+
+    if (message.type === "getBlackBoxStatus") {
+      sendResponse({ ok: true, status: blackBoxStatus() });
+      return true;
+    }
+
+    if (message.type === "markBlackBoxJank") {
+      const now = performance.now();
+      safeBlackBoxMark("manual-jank", {
+        source: "popup",
+        wallTimeMs: wallTimeForPerf(now),
+        perfTimeMs: now,
+        activityState,
+        optimizationEnabled
+      });
+      sendResponse({ ok: true, status: blackBoxStatus() });
+      return true;
+    }
+
+    if (message.type === "getBlackBoxExport") {
+      try {
+        sendResponse({ ok: true, payload: buildBlackBoxExport(message.mode) });
+      } catch (_) {
+        sendResponse({ ok: false, error: "诊断数据导出失败" });
+      }
       return true;
     }
   });
