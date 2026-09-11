@@ -1,12 +1,12 @@
 {
   "name": "chatgpt-page-perf-guard",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "private": true,
   "scripts": {
     "test": "node --test tests/*.test.js",
     "check": "node --check extension/core.js && node --check extension/runtime.js && node --check extension/blackbox.js && node --check extension/monitor.js && node --check extension/background.js && node --check extension/handoff.js && node --check extension/popup.js"
   },
-  "description": "Local-only ChatGPT page performance guard with self-yielding monitoring and safe window handoff.",
+  "description": "Local-only ChatGPT page performance guard with self-yielding monitoring, session diagnostic black box, and safe window handoff.",
   "license": "MIT",
   "engines": {
     "node": ">=20"
