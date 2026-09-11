@@ -91,13 +91,14 @@
           <div class="context-note">仅记录本机性能元数据，不记录聊天正文</div>
         </div>
       </div>
+      <div id="blackBoxStatus" class="context-note">正在读取诊断状态…</div>
       <div class="detail-row"><span>缓冲事件</span><strong id="blackBoxEventCount">--</strong></div>
       <div class="detail-row"><span>会话保护</span><strong id="blackBoxCheckpointState">UNKNOWN</strong></div>
       <div class="detail-row"><span>最近发送标记</span><strong id="blackBoxLastSend">UNKNOWN</strong></div>
       <div class="detail-row"><span>严重事件簇</span><strong id="blackBoxCluster">UNKNOWN</strong></div>
       <button id="exportSendIncidentButton" class="import-button" type="button" disabled>导出最近发送现场</button>
       <button id="exportRecentBlackBoxButton" class="import-button" type="button" disabled>导出最近10分钟</button>
-      <button id="markBlackBoxIncidentButton" class="import-button" type="button" disabled>标记刚才卡顿</button>
+      <button id="markIncidentButton" class="import-button" type="button" disabled>标记刚才卡顿</button>
       <div class="import-note">导出 JSON 只在点击时本地生成；不会自动上传，也不需要下载权限。</div>
       <div id="blackBoxActionStatus" class="import-status hidden"></div>
     </section>
