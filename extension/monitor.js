@@ -85,6 +85,7 @@
   let checkpointAvailable = false;
   let checkpointStatus = "not-restored";
   let restoreAttemptedConversationId = null;
+  let restoreSettledConversationId = null;
   let pendingSevereCheckpoint = false;
   let severeWindowStart = -Infinity;
   let severeWindowCount = 0;
@@ -585,16 +586,19 @@
     const conversationId = currentConversationId();
     if (!conversationId || restoreAttemptedConversationId === conversationId) return;
     restoreAttemptedConversationId = conversationId;
+    restoreSettledConversationId = null;
     checkpointStatus = "restoring";
 
     sendRuntimeMessage({ type: "blackBoxRestore" }).then((response) => {
       const snapshot = response && response.ok ? response.snapshot : null;
       if (!snapshot) {
         checkpointStatus = response && response.ok ? "empty" : "unavailable";
+        restoreSettledConversationId = conversationId;
         return;
       }
       if (snapshot.conversationId !== conversationId) {
         checkpointStatus = "conversation-mismatch";
+        restoreSettledConversationId = conversationId;
         return;
       }
       try {
@@ -604,8 +608,10 @@
       } catch (_) {
         checkpointStatus = "restore-failed";
       }
+      restoreSettledConversationId = conversationId;
     }, () => {
       checkpointStatus = "unavailable";
+      restoreSettledConversationId = conversationId;
     });
   }
 
@@ -613,7 +619,7 @@
     if (!blackBoxAvailable || document.hidden || activityState !== "quiet") return;
     if (checkpointInFlight || now < checkpointBackoffUntil) return;
     const conversationId = currentConversationId();
-    if (!conversationId || restoreAttemptedConversationId !== conversationId) return;
+    if (!conversationId || restoreSettledConversationId !== conversationId) return;
     const due = pendingSevereCheckpoint || now - lastCheckpointAt >= BLACK_BOX_CHECKPOINT_MS;
     if (!due) return;
 
