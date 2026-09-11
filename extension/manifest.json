@@ -17,6 +17,7 @@
       ],
       "js": [
         "core.js",
+        "runtime.js",
         "monitor.js"
       ],
       "run_at": "document_start"
