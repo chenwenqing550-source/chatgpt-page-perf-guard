@@ -84,7 +84,7 @@
     <section class="card control">
       <div>
         <div class="control-title">长聊天优化</div>
-        <div class="control-note">减少屏外历史消息的渲染压力</div>
+        <div class="control-note">只冷却已确认远屏且稳定的历史消息</div>
       </div>
       <label class="switch" title="只控制当前 ChatGPT 标签页">
         <input id="optimizationToggle" type="checkbox" checked>
@@ -92,15 +92,47 @@
       </label>
     </section>
 
+    <section class="card history-card">
+      <div class="history-head">
+        <div>
+          <div class="context-label">换窗交接</div>
+          <div class="context-note">结构化提炼当前会话，避免旧版本/未验证状态混入新窗口</div>
+        </div>
+      </div>
+      <button id="prepareHandoffButton" class="import-button" type="button">
+        准备换窗交接
+      </button>
+      <div class="import-note">
+        只把高保真交接指令填入当前 ChatGPT 输入框；不会自动抓取完整聊天正文，不会自动发送，也不会自动新建聊天。
+      </div>
+      <div id="handoffStatus" class="import-status hidden"></div>
+    </section>
+
     <details class="card details">
       <summary>详细指标</summary>
+      <div class="detail-row">
+        <span>运行状态</span>
+        <strong id="activityState">UNKNOWN</strong>
+      </div>
+      <div class="detail-row">
+        <span>主动探针</span>
+        <strong id="probeState">UNKNOWN</strong>
+      </div>
+      <div class="detail-row">
+        <span>扩展本轮主动工作</span>
+        <strong id="selfWork">UNKNOWN</strong>
+      </div>
+      <div class="detail-row">
+        <span>最近长帧/阻塞事件</span>
+        <strong id="recentIncident">UNKNOWN</strong>
+      </div>
       <div class="detail-row">
         <span>近 90 秒页面压力 <small>本机估算</small></span>
         <strong id="windowPressure">--%</strong>
       </div>
       <div class="detail-row">
-        <span>屏外渲染覆盖</span>
-        <strong id="coverage">--%</strong>
+        <span>远屏冷却覆盖</span>
+        <strong id="coverage">UNKNOWN</strong>
       </div>
       <div class="detail-row">
         <span>页面阻塞</span>
