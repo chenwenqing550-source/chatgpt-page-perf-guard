@@ -13,8 +13,8 @@
   const DRIFT_INTERVAL_MS = 1000;
   const FRAME_BURST_MS = 250;
   const ACTIVE_PROBE_EVERY_MS = 15000;
-  const COVERAGE_EVERY_MS = 12000;
-  const MAX_COVERAGE_SAMPLES = 48;
+  const COLD_MAINTENANCE_EVERY_MS = 5000;
+  const COLD_STABLE_MS = 5000;
   const MUTATION_WINDOW_MS = 1000;
   const SCROLL_ACTIVE_MS = 700;
   const DIAGNOSTIC_ITEMS = 80;
@@ -32,8 +32,8 @@
   let optimizationEnabled = true;
   let firstSampleAt = performance.now();
   let lastTimerExpected = performance.now() + DRIFT_INTERVAL_MS;
-  let lastCoverageAt = 0;
-  let coverageEstimate = 0;
+  let lastColdMaintenanceAt = 0;
+  let coverageEstimate = null;
   let loadedBlocks = 0;
   let structureMode = "unknown";
   let recommendationState = "sampling";
@@ -47,6 +47,7 @@
   let selfWorkMs = 0;
   let activityState = "quiet";
   let activeProbeSuppressed = true;
+  let turnObserver = null;
 
   const blockingSamples = [];
   const frameSamples = [];
@@ -55,12 +56,15 @@
   const interactionSamples = new Map();
   const historySamples = [];
   const incidents = Runtime.createRingBuffer(DIAGNOSTIC_ITEMS);
+  const trackedTurns = new Set();
+  const turnNearState = new WeakMap();
+  const turnMutationAt = new WeakMap();
 
   let latest = {
     pagePressure: null,
     windowPressure: 0,
     recommendationState: "sampling",
-    coverage: 0,
+    coverage: null,
     optimizationEnabled: true,
     status: "starting",
     blockingRatio: null,
@@ -152,12 +156,53 @@
     return fallback;
   }
 
+  function clearColdState() {
+    for (const node of trackedTurns) {
+      if (node && node.removeAttribute) node.removeAttribute("data-cgpt-perf-cold");
+    }
+  }
+
   function applyOptimizationState() {
     const root = document.documentElement;
     if (!root) return;
     if (optimizationEnabled) root.setAttribute("data-cgpt-perf-opt", "on");
-    else root.removeAttribute("data-cgpt-perf-opt");
+    else {
+      root.removeAttribute("data-cgpt-perf-opt");
+      clearColdState();
+    }
     latest.optimizationEnabled = optimizationEnabled;
+  }
+
+  function ensureTurnObserver() {
+    if (turnObserver || typeof IntersectionObserver !== "function") return turnObserver;
+
+    try {
+      turnObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          const node = entry.target;
+          const isNear = Boolean(entry.isIntersecting);
+          turnNearState.set(node, isNear);
+          if (isNear && node && node.removeAttribute) {
+            node.removeAttribute("data-cgpt-perf-cold");
+          }
+        }
+      }, {
+        root: null,
+        rootMargin: "1800px 0px 1800px 0px",
+        threshold: 0
+      });
+    } catch (_) {
+      turnObserver = null;
+    }
+
+    return turnObserver;
+  }
+
+  function closestTurn(target) {
+    let node = target || null;
+    if (node && node.nodeType !== 1) node = node.parentElement || null;
+    if (!node || typeof node.closest !== "function") return null;
+    return node.closest('article[data-testid^="conversation-turn-"], [data-message-author-role]');
   }
 
   function observeBlocking() {
@@ -221,6 +266,15 @@
         const count = Math.max(1, records.length);
         mutationSamples.push({ time: now, count });
         lastMutationAt = now;
+
+        for (const record of records) {
+          const turn = closestTurn(record.target);
+          if (turn) {
+            turnMutationAt.set(turn, now);
+            if (turn.removeAttribute) turn.removeAttribute("data-cgpt-perf-cold");
+          }
+        }
+
         pruneMutations(now);
       });
       observer.observe(document.documentElement, {
@@ -282,34 +336,64 @@
     if (!activeProbeSuppressed) runFrameBurst();
   }
 
-  function estimateCoverage(now, snapshot) {
+  function maintainColdTurns(now, snapshot) {
     if (!Runtime.shouldRunLayoutWork(snapshot.state, snapshot.stableForMs)) return coverageEstimate;
-    if (now - lastCoverageAt < COVERAGE_EVERY_MS) return coverageEstimate;
+    if (now - lastColdMaintenanceAt < COLD_MAINTENANCE_EVERY_MS) return coverageEstimate;
 
-    const started = performance.now();
-    lastCoverageAt = now;
-    const nodes = currentTargets();
-    loadedBlocks = nodes.length;
-    if (!loadedBlocks) {
-      coverageEstimate = 0;
-      selfWorkMs = Math.max(selfWorkMs, performance.now() - started);
+    const observer = ensureTurnObserver();
+    if (!observer) {
+      coverageEstimate = null;
       return coverageEstimate;
     }
 
-    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
-    const sampleCount = Math.min(loadedBlocks, MAX_COVERAGE_SAMPLES);
-    const step = loadedBlocks / sampleCount;
-    let offscreen = 0;
+    lastColdMaintenanceAt = now;
+    const nodes = Array.from(currentTargets());
+    loadedBlocks = nodes.length;
 
-    for (let i = 0; i < sampleCount; i += 1) {
-      const index = Math.min(loadedBlocks - 1, Math.floor(i * step));
-      const rect = nodes[index].getBoundingClientRect();
-      if (rect.bottom < -400 || rect.top > viewportHeight + 400) offscreen += 1;
+    for (const tracked of Array.from(trackedTurns)) {
+      if (!tracked || tracked.isConnected === false) {
+        trackedTurns.delete(tracked);
+        try { observer.unobserve(tracked); } catch (_) {}
+      }
     }
 
-    coverageEstimate = Math.round((offscreen / sampleCount) * 100);
-    selfWorkMs = Math.max(selfWorkMs, performance.now() - started);
+    for (const node of nodes) {
+      if (!trackedTurns.has(node)) {
+        trackedTurns.add(node);
+        turnMutationAt.set(node, now);
+        try { observer.observe(node); } catch (_) {}
+      }
+    }
+
+    const lastProtected = new Set(nodes.slice(-2));
+    let coldCount = 0;
+
+    for (const node of nodes) {
+      const nearState = turnNearState.get(node);
+      const mutatedAt = turnMutationAt.get(node);
+      const recentlyMutated = Number.isFinite(mutatedAt) && now - mutatedAt < COLD_STABLE_MS;
+      const canCool =
+        optimizationEnabled &&
+        nearState === false &&
+        !lastProtected.has(node) &&
+        !recentlyMutated;
+
+      if (canCool) {
+        node.setAttribute("data-cgpt-perf-cold", "on");
+        coldCount += 1;
+      } else {
+        node.removeAttribute("data-cgpt-perf-cold");
+      }
+    }
+
+    coverageEstimate = loadedBlocks
+      ? Math.round((coldCount / loadedBlocks) * 100)
+      : 0;
     return coverageEstimate;
+  }
+
+  function estimateCoverage(now, snapshot) {
+    return maintainColdTurns(now, snapshot);
   }
 
   function collectSignals(now) {
@@ -373,7 +457,7 @@
 
     foregroundUpdateTicks += 1;
     selfWorkMs = 0;
-    const coverage = optimizationEnabled ? estimateCoverage(now, snapshot) : coverageEstimate;
+    const coverage = estimateCoverage(now, snapshot);
     const signals = collectSignals(now);
 
     const pagePressure = Core.calculatePagePressure({
