@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.join(__dirname, '..', 'extension');
-const sourceFiles = ['core.js', 'monitor.js', 'popup.js'];
+const sourceFiles = ['core.js', 'runtime.js', 'monitor.js', 'handoff.js', 'popup.js'];
 
 test('manifest stays least-privilege and only injects into chatgpt.com', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
@@ -31,5 +31,19 @@ test('runtime source has no network, persistent storage, dynamic code, or cookie
   ];
   for (const pattern of forbidden) {
     assert.doesNotMatch(source, pattern, `forbidden capability matched: ${pattern}`);
+  }
+});
+
+test('handoff never auto-sends or programmatically opens another chat', () => {
+  const source = fs.readFileSync(path.join(root, 'handoff.js'), 'utf8');
+  const forbidden = [
+    /\.click\s*\(/,
+    /requestSubmit\s*\(/,
+    /\.submit\s*\(/,
+    /KeyboardEvent/,
+    /window\.open\s*\(/
+  ];
+  for (const pattern of forbidden) {
+    assert.doesNotMatch(source, pattern, `handoff auto-action matched: ${pattern}`);
   }
 });
