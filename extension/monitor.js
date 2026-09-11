@@ -13,11 +13,11 @@
   const DRIFT_INTERVAL_MS = 1000;
   const FRAME_BURST_MS = 250;
   const ACTIVE_PROBE_EVERY_MS = 15000;
-  const COLD_MAINTENANCE_EVERY_MS = 5000;
+  const COLD_MAINTENANCE_EVERY_MS = 10000;
   const COLD_STABLE_MS = 5000;
   const MUTATION_WINDOW_MS = 1000;
   const SCROLL_ACTIVE_MS = 700;
-  const DIAGNOSTIC_ITEMS = 80;
+  const DIAGNOSTIC_ITEMS = 60;
 
   const PerformanceObserverApi = globalThis.PerformanceObserver;
   const supportedEntryTypes = new Set(
@@ -202,7 +202,10 @@
     let node = target || null;
     if (node && node.nodeType !== 1) node = node.parentElement || null;
     if (!node || typeof node.closest !== "function") return null;
-    return node.closest('article[data-testid^="conversation-turn-"], [data-message-author-role]');
+
+    const primaryTurn = node.closest('article[data-testid^="conversation-turn-"]');
+    if (primaryTurn) return primaryTurn;
+    return node.closest("[data-message-author-role]");
   }
 
   function observeBlocking() {
@@ -267,8 +270,9 @@
         mutationSamples.push({ time: now, count });
         lastMutationAt = now;
 
-        for (const record of records) {
-          const turn = closestTurn(record.target);
+        const inspectCount = Math.min(records.length, 12);
+        for (let i = 0; i < inspectCount; i += 1) {
+          const turn = closestTurn(records[i].target);
           if (turn) {
             turnMutationAt.set(turn, now);
             if (turn.removeAttribute) turn.removeAttribute("data-cgpt-perf-cold");
@@ -379,9 +383,11 @@
         !recentlyMutated;
 
       if (canCool) {
-        node.setAttribute("data-cgpt-perf-cold", "on");
+        if (node.getAttribute("data-cgpt-perf-cold") !== "on") {
+          node.setAttribute("data-cgpt-perf-cold", "on");
+        }
         coldCount += 1;
-      } else {
+      } else if (node.hasAttribute("data-cgpt-perf-cold")) {
         node.removeAttribute("data-cgpt-perf-cold");
       }
     }
