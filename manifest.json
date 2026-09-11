@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "ChatGPT 页面性能助手",
+  "version": "1.6.1",
+  "description": "本机检测 ChatGPT 页面压力与换窗建议；可选导入窗口分析 JSON 做历史深度校准。模型上下文不可验证时始终显示 UNKNOWN。零联网、零遥测、零存储。",
+  "action": {
+    "default_title": "ChatGPT 页面性能助手",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "css": [
+        "styles.css"
+      ],
+      "js": [
+        "core.js",
+        "monitor.js"
+      ],
+      "run_at": "document_start"
+    }
+  ]
+}
