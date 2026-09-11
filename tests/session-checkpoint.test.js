@@ -142,6 +142,23 @@ test('restored events are rebased onto the new performance timeline using wall c
   assert.equal(recorder.latestMarker('send', 5000).data.source, 'enter');
 });
 
+test('restore merges asynchronously returned old events ahead of newer in-page events', () => {
+  const BlackBox = loadBlackBox();
+  const recorder = BlackBox.createRecorder({ capacity: 20, maxAgeMs: 600000 });
+  recorder.record('sample', { label: 'new-page' }, { perfTimeMs: 1000, wallTimeMs: 201000 });
+
+  const result = recorder.restore([
+    { kind: 'send', perfTimeMs: 9000, wallTimeMs: 199000, data: { source: 'enter' } },
+    { kind: 'longtask', perfTimeMs: 9100, wallTimeMs: 199100, data: { duration: 180 } }
+  ], { nowPerf: 1000, wallTimeMs: 201000 });
+
+  assert.equal(result.restored, 2);
+  const events = Array.from(recorder.snapshot(1000));
+  assert.deepEqual(events.map((item) => item.kind), ['send', 'longtask', 'sample']);
+  assert.deepEqual(events.map((item) => item.wallTimeMs), [199000, 199100, 201000]);
+  assert.equal(events[0].perfTimeMs, -1000);
+});
+
 test('monitor checkpoints only from existing update path while quiet and has failure suspension', () => {
   assert.match(monitorSource, /CHECKPOINT_INTERVAL_MS\s*=\s*(?:60|90|120)\s*\*\s*1000/);
   assert.match(monitorSource, /activityState\s*!==\s*["']quiet["']/);
