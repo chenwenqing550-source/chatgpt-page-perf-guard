@@ -2,6 +2,7 @@
   "use strict";
 
   const STABLE_RESUME_MS = 2500;
+  const INTERACTION_GUARD_MS = 2500;
   const GENERATING_MUTATIONS_PER_SEC = 6;
   const BUSY_BLOCKING_MS = 80;
 
@@ -10,17 +11,19 @@
     scrollActive = false,
     mutationRate = 0,
     recentBlockingMs = 0,
-    stableForMs = Infinity
+    stableForMs = Infinity,
+    interactionAgeMs = Infinity
   } = {}) {
     if (hidden) return "background";
 
     const generating = Number(mutationRate) >= GENERATING_MUTATIONS_PER_SEC;
     const blocked = Number(recentBlockingMs) >= BUSY_BLOCKING_MS;
+    const recentInteraction = Number(interactionAgeMs) < INTERACTION_GUARD_MS;
 
-    if (scrollActive && (generating || blocked)) return "busy";
+    if (scrollActive && (generating || blocked || recentInteraction)) return "busy";
     if (scrollActive) return "scrolling";
     if (generating) return "generating";
-    if (blocked) return "busy";
+    if (blocked || recentInteraction) return "busy";
     if (Number(stableForMs) < STABLE_RESUME_MS) return "busy";
     return "quiet";
   }
@@ -53,6 +56,7 @@
 
   globalThis.CGPTPerfRuntime = Object.freeze({
     STABLE_RESUME_MS,
+    INTERACTION_GUARD_MS,
     GENERATING_MUTATIONS_PER_SEC,
     BUSY_BLOCKING_MS,
     classifyActivityState,
