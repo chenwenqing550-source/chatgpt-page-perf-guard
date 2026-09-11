@@ -18,7 +18,8 @@
       "js": [
         "core.js",
         "runtime.js",
-        "monitor.js"
+        "monitor.js",
+        "handoff.js"
       ],
       "run_at": "document_start"
     }
