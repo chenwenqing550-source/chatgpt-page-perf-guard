@@ -154,6 +154,14 @@
       head = (head + 1) % capacity;
     }
 
+    function resetWith(events) {
+      slots.fill(undefined);
+      head = 0;
+      count = 0;
+      const start = Math.max(0, events.length - capacity);
+      for (let index = start; index < events.length; index += 1) append(events[index]);
+    }
+
     function record(kind, data = {}, timestamps = {}) {
       const time = resolveTimestamps(timestamps);
       const event = {
@@ -188,27 +196,44 @@
     }
 
     function restore(sourceEvents, context = {}) {
-      if (!Array.isArray(sourceEvents) || !sourceEvents.length) return { restored: 0 };
+      if (!Array.isArray(sourceEvents) || !sourceEvents.length) return { restored: 0, skipped: 0 };
       const nowPerf = Math.max(0, toFiniteNumber(context.nowPerf));
       const wallTimeMs = Math.max(0, toFiniteNumber(context.wallTimeMs, Date.now()));
+      const merged = snapshot(nowPerf);
       let restored = 0;
+      let skipped = 0;
 
       for (const sourceEvent of sourceEvents) {
-        if (!sourceEvent || typeof sourceEvent !== "object") continue;
+        if (!sourceEvent || typeof sourceEvent !== "object") {
+          skipped += 1;
+          continue;
+        }
         const sourceWall = Math.max(0, toFiniteNumber(sourceEvent.wallTimeMs));
-        if (!sourceWall) continue;
-        const ageMs = Math.max(0, wallTimeMs - sourceWall);
-        if (ageMs > maxAgeMs) continue;
-        const rebasedPerf = Math.max(0, nowPerf - ageMs);
-        record(sourceEvent.kind, sourceEvent.data, {
-          perfTimeMs: rebasedPerf,
-          wallTimeMs: sourceWall
+        if (!sourceWall) {
+          skipped += 1;
+          continue;
+        }
+        const ageMs = wallTimeMs - sourceWall;
+        if (ageMs > maxAgeMs || ageMs < -5000) {
+          skipped += 1;
+          continue;
+        }
+        merged.push({
+          kind: sanitizeString(sourceEvent.kind, 64) || "unknown",
+          perfTimeMs: nowPerf - ageMs,
+          wallTimeMs: sourceWall,
+          data: sanitizeData(sourceEvent.data)
         });
         restored += 1;
       }
 
+      merged.sort((a, b) => {
+        const wallDelta = a.wallTimeMs - b.wallTimeMs;
+        return wallDelta || a.perfTimeMs - b.perfTimeMs;
+      });
+      resetWith(merged);
       prune(nowPerf);
-      return { restored };
+      return { restored, skipped };
     }
 
     function latestMarker(markerKind, nowPerf) {
