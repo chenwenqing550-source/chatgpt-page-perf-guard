@@ -34,8 +34,8 @@ test('popup requests status and only serializes evidence during explicit export'
   assert.match(popup, /getBlackBoxStatus/);
   assert.match(popup, /markBlackBoxIncident/);
   assert.match(popup, /exportBlackBox/);
-  assert.match(popup, /kind:\s*["']send["']/);
-  assert.match(popup, /kind:\s*["']recent["']/);
+  assert.match(popup, /exportBlackBox\(["']send["']\)/);
+  assert.match(popup, /exportBlackBox\(["']recent["']\)/);
   assert.match(popup, /new\s+Blob\s*\(/);
   assert.match(popup, /JSON\.stringify\s*\(/);
   assert.match(popup, /URL\.createObjectURL/);
