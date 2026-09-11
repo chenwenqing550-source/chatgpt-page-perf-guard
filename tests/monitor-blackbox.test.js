@@ -5,12 +5,22 @@ const path = require('node:path');
 
 const root = path.join(__dirname, '..', 'extension');
 const monitor = fs.readFileSync(path.join(root, 'monitor.js'), 'utf8');
+const blackbox = fs.readFileSync(path.join(root, 'blackbox.js'), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
 
 function functionBody(name) {
-  const match = monitor.match(new RegExp(`function\\s+${name}\\s*\\([^)]*\\)\\s*\\{([\\s\\S]*?)\\n\\s*\\}`, 'm'));
+  const signature = new RegExp(`function\\s+${name}\\s*\\([^)]*\\)\\s*\\{`, 'm');
+  const match = signature.exec(monitor);
   assert.ok(match, `${name} must exist`);
-  return match[1];
+  const start = match.index + match[0].length;
+  let depth = 1;
+  for (let index = start; index < monitor.length; index += 1) {
+    const char = monitor[index];
+    if (char === '{') depth += 1;
+    else if (char === '}') depth -= 1;
+    if (depth === 0) return monitor.slice(start, index);
+  }
+  assert.fail(`${name} must have a balanced function body`);
 }
 
 test('black box module loads before monitor and monitor degrades safely if unavailable', () => {
@@ -39,7 +49,8 @@ test('scroll marker stays lightweight and records position only', () => {
 
 test('LoAF observer forwards browser-provided layout attribution into black box', () => {
   assert.match(monitor, /sanitizeLoafEntry/);
-  assert.match(monitor, /forcedStyleAndLayoutDuration|styleAndLayoutStart/);
+  assert.match(blackbox, /forcedStyleAndLayoutDuration/);
+  assert.match(blackbox, /styleAndLayoutStart/);
 });
 
 test('send and scroll hot paths do no serialization, storage, scans, or forced-layout reads', () => {
