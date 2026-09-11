@@ -8,6 +8,11 @@
   const WebExt = globalThis.browser || globalThis.chrome;
   if (!WebExt || !WebExt.runtime) return;
 
+  const BlackBox = globalThis.CGPTPerfBlackBox;
+  const blackBox = BlackBox && typeof BlackBox.createRecorder === "function"
+    ? BlackBox.createRecorder({ capacity: 480, maxAgeMs: 10 * 60 * 1000 })
+    : null;
+
   const WINDOW_MS = 10000;
   const UPDATE_MS = 2000;
   const DRIFT_INTERVAL_MS = 1000;
@@ -18,6 +23,8 @@
   const MUTATION_WINDOW_MS = 1000;
   const SCROLL_ACTIVE_MS = 700;
   const DIAGNOSTIC_ITEMS = 60;
+  const SEND_MARKER_DEDUPE_MS = 500;
+  const BLACKBOX_SCROLL_SAMPLE_MS = 500;
 
   const PerformanceObserverApi = globalThis.PerformanceObserver;
   const supportedEntryTypes = new Set(
@@ -44,6 +51,8 @@
   let lastInteractionAt = -Infinity;
   let lastMutationAt = -Infinity;
   let lastBlockingAt = -Infinity;
+  let lastSendMarkerAt = -Infinity;
+  let lastBlackBoxScrollAt = -Infinity;
   let selfWorkMs = 0;
   let activityState = "quiet";
   let activeProbeSuppressed = true;
@@ -112,6 +121,43 @@
       (sum, item) => now - item.time <= maxAge ? sum + item.duration : sum,
       0
     );
+  }
+
+  function blackBoxTimes(perfTimeMs = performance.now()) {
+    const perfValue = Number(perfTimeMs) || 0;
+    const origin = Number(performance.timeOrigin);
+    const wallTimeMs = Number.isFinite(origin) && origin > 0
+      ? origin + perfValue
+      : Date.now();
+    return {
+      perfTimeMs: perfValue,
+      wallTimeMs: Math.max(0, Math.round(wallTimeMs))
+    };
+  }
+
+  function pageTimeOriginIso() {
+    const origin = Number(performance.timeOrigin);
+    if (!Number.isFinite(origin) || origin <= 0) return "";
+    try {
+      return new Date(origin).toISOString();
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function blackBoxStatus() {
+    if (!blackBox) return null;
+    const now = performance.now();
+    const events = blackBox.snapshot(now);
+    const clusters = blackBox.detectSevereClusters(now);
+    return {
+      eventCount: events.length,
+      lastSendMarker: blackBox.latestMarker("send", now),
+      lastManualMarker: blackBox.latestMarker("manual", now),
+      severeClusterCount: clusters.length,
+      latestSevereCluster: clusters.length ? clusters[clusters.length - 1] : null,
+      checkpointState: "memory-only"
+    };
   }
 
   function activitySnapshot(now) {
@@ -218,15 +264,29 @@
         const now = performance.now();
         for (const entry of list.getEntries()) {
           const duration = Number(entry.duration) || 0;
-          const eventTime = entry.startTime + duration;
+          const eventTime = (Number(entry.startTime) || 0) + duration;
           blockingSamples.push({ time: eventTime, duration });
           lastBlockingAt = Math.max(lastBlockingAt, eventTime);
-          if (duration >= 50) incidents.push({
-            time: Math.round(eventTime),
-            kind: type,
-            duration: Math.round(duration),
-            optimizationEnabled
-          });
+          if (duration >= 50) {
+            incidents.push({
+              time: Math.round(eventTime),
+              kind: type,
+              duration: Math.round(duration),
+              optimizationEnabled
+            });
+            if (blackBox) {
+              blackBox.record(type, {
+                duration,
+                blockingDuration: Number(entry.blockingDuration) || 0,
+                renderStart: Number(entry.renderStart) || 0,
+                styleAndLayoutStart: Number(entry.styleAndLayoutStart) || 0,
+                firstUIEventTimestamp: Number(entry.firstUIEventTimestamp) || 0,
+                scripts: entry.scripts || [],
+                activityState,
+                optimizationEnabled
+              }, blackBoxTimes(eventTime));
+            }
+          }
         }
         pruneArray(blockingSamples, now);
       });
@@ -247,10 +307,18 @@
           if (!interactionId) continue;
           const duration = Number(entry.duration) || 0;
           if (duration <= 0) continue;
-          const eventTime = entry.startTime + duration;
+          const eventTime = (Number(entry.startTime) || 0) + duration;
           const existing = interactionSamples.get(interactionId);
           if (!existing || duration > existing.duration) {
             interactionSamples.set(interactionId, { time: eventTime, duration });
+          }
+          if (blackBox && duration >= 40) {
+            blackBox.record("event-timing", {
+              interactionId,
+              duration,
+              eventName: String(entry.name || ""),
+              activityState
+            }, blackBoxTimes(eventTime));
           }
         }
         pruneInteractions(now);
@@ -295,8 +363,25 @@
     lastInteractionAt = performance.now();
   }
 
+  function markSendMarker(source) {
+    if (!blackBox) return;
+    const now = performance.now();
+    if (now - lastSendMarkerAt < SEND_MARKER_DEDUPE_MS) return;
+    lastSendMarkerAt = now;
+    blackBox.markSend(source, blackBoxTimes(now));
+  }
+
   function markScroll() {
-    lastScrollAt = performance.now();
+    const now = performance.now();
+    lastScrollAt = now;
+    if (!blackBox || now - lastBlackBoxScrollAt < BLACKBOX_SCROLL_SAMPLE_MS) return;
+    lastBlackBoxScrollAt = now;
+    const view = globalThis.window || globalThis;
+    blackBox.record("scroll", {
+      scrollX: Number(view.scrollX) || 0,
+      scrollY: Number(view.scrollY) || 0,
+      activityState
+    }, blackBoxTimes(now));
   }
 
   function installActivityListeners() {
@@ -304,6 +389,13 @@
     for (const type of ["pointerdown", "keydown", "input", "submit", "click"]) {
       document.addEventListener(type, markInteraction, passive);
     }
+    document.addEventListener("keydown", (event) => {
+      if (!event || event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+      markSendMarker("enter");
+    }, passive);
+    document.addEventListener("submit", () => {
+      markSendMarker("submit");
+    }, passive);
     for (const type of ["wheel", "touchmove", "scroll"]) {
       document.addEventListener(type, markScroll, passive);
     }
@@ -501,6 +593,7 @@
       Number(!passiveSignalsAvailable) +
       1 +
       Number(supportsEventTiming);
+    const currentMutationRate = mutationRate(now);
 
     selfWorkMs = Math.max(selfWorkMs, performance.now() - workStarted);
     incidents.push({
@@ -508,10 +601,23 @@
       kind: "sample",
       activityState,
       pagePressure,
-      mutationRate: mutationRate(now),
+      mutationRate: currentMutationRate,
       selfWorkMs: Math.round(selfWorkMs * 10) / 10,
       optimizationEnabled
     });
+
+    if (blackBox) {
+      blackBox.record("sample", {
+        activityState,
+        pagePressure,
+        mutationRate: currentMutationRate,
+        selfWorkMs: Math.round(selfWorkMs * 10) / 10,
+        optimizationEnabled,
+        loadedBlocks,
+        coverage
+      }, blackBoxTimes(now));
+      selfWorkMs = Math.max(selfWorkMs, performance.now() - workStarted);
+    }
 
     latest = {
       pagePressure,
@@ -567,6 +673,47 @@
           historyCalibration: calibrationForCurrentWindow(),
           currentConversationId: currentConversationId()
         }
+      });
+      return true;
+    }
+
+    if (message.type === "getBlackBoxStatus") {
+      if (!blackBox) {
+        sendResponse({ ok: false, error: "BLACK_BOX_UNAVAILABLE" });
+        return true;
+      }
+      sendResponse({ ok: true, status: blackBoxStatus() });
+      return true;
+    }
+
+    if (message.type === "markBlackBoxIncident") {
+      if (!blackBox) {
+        sendResponse({ ok: false, error: "BLACK_BOX_UNAVAILABLE" });
+        return true;
+      }
+      const now = performance.now();
+      blackBox.markManual(blackBoxTimes(now));
+      sendResponse({ ok: true, status: blackBoxStatus() });
+      return true;
+    }
+
+    if (message.type === "exportBlackBox") {
+      if (!blackBox) {
+        sendResponse({ ok: false, error: "BLACK_BOX_UNAVAILABLE" });
+        return true;
+      }
+      const kind = ["send", "manual", "recent"].includes(message.kind)
+        ? message.kind
+        : "recent";
+      sendResponse({
+        ok: true,
+        payload: blackBox.buildExport(kind, {
+          nowPerf: performance.now(),
+          exportedAt: new Date().toISOString(),
+          pageTimeOrigin: pageTimeOriginIso(),
+          conversationId: currentConversationId(),
+          optimizationEnabled
+        })
       });
       return true;
     }
