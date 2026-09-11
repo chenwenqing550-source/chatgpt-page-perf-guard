@@ -10,9 +10,18 @@ const backgroundPath = path.join(root, 'background.js');
 const background = fs.existsSync(backgroundPath) ? fs.readFileSync(backgroundPath, 'utf8') : '';
 
 function functionBody(name) {
-  const match = monitor.match(new RegExp(`function\\s+${name}\\s*\\([^)]*\\)\\s*\\{([\\s\\S]*?)\\n\\s*\\}`, 'm'));
+  const signature = new RegExp(`function\\s+${name}\\s*\\([^)]*\\)\\s*\\{`, 'm');
+  const match = signature.exec(monitor);
   assert.ok(match, `${name} must exist`);
-  return match[1];
+  const start = match.index + match[0].length;
+  let depth = 1;
+  for (let index = start; index < monitor.length; index += 1) {
+    const char = monitor[index];
+    if (char === '{') depth += 1;
+    else if (char === '}') depth -= 1;
+    if (depth === 0) return monitor.slice(start, index);
+  }
+  assert.fail(`${name} must have a balanced function body`);
 }
 
 test('manifest adds only session-storage capability and an MV3 service worker', () => {
@@ -54,7 +63,6 @@ test('send and scroll handlers cannot send checkpoint messages', () => {
 });
 
 test('severe incident checkpoint trigger is O(1) and does not scan recorder history', () => {
-  assert.match(monitor, /function\s+noteSevereBlocking/);
   const body = functionBody('noteSevereBlocking');
   assert.doesNotMatch(body, /blackBox\.events|findSevereClusters|querySelector|reduce\s*\(/);
   assert.match(body, /pendingSevereCheckpoint/);
