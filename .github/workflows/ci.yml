@@ -1,6 +1,9 @@
 name: CI
 
 on:
+  push:
+    branches:
+      - perf/v1.7.0-self-yielding
   pull_request:
     branches: [main]
 
