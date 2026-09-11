@@ -187,6 +187,30 @@
       return result;
     }
 
+    function restore(sourceEvents, context = {}) {
+      if (!Array.isArray(sourceEvents) || !sourceEvents.length) return { restored: 0 };
+      const nowPerf = Math.max(0, toFiniteNumber(context.nowPerf));
+      const wallTimeMs = Math.max(0, toFiniteNumber(context.wallTimeMs, Date.now()));
+      let restored = 0;
+
+      for (const sourceEvent of sourceEvents) {
+        if (!sourceEvent || typeof sourceEvent !== "object") continue;
+        const sourceWall = Math.max(0, toFiniteNumber(sourceEvent.wallTimeMs));
+        if (!sourceWall) continue;
+        const ageMs = Math.max(0, wallTimeMs - sourceWall);
+        if (ageMs > maxAgeMs) continue;
+        const rebasedPerf = Math.max(0, nowPerf - ageMs);
+        record(sourceEvent.kind, sourceEvent.data, {
+          perfTimeMs: rebasedPerf,
+          wallTimeMs: sourceWall
+        });
+        restored += 1;
+      }
+
+      prune(nowPerf);
+      return { restored };
+    }
+
     function latestMarker(markerKind, nowPerf) {
       const current = snapshot(nowPerf);
       for (let index = current.length - 1; index >= 0; index -= 1) {
@@ -302,6 +326,7 @@
       markSend,
       markManual,
       snapshot,
+      restore,
       latestMarker,
       sliceAroundMarker,
       detectSevereClusters,
