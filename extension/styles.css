@@ -1,14 +1,14 @@
 /*
-ChatGPT 页面性能助手 v1.6.1
-仅做屏外历史消息渲染优化，不隐藏、不删除消息。
+ChatGPT 页面性能助手 v1.7.0 candidate
+只优化已确认远屏且稳定的历史消息；近视口、正在增长和最近消息保持正常渲染。
 */
 
-html[data-cgpt-perf-opt="on"] article[data-testid^="conversation-turn-"] {
+html[data-cgpt-perf-opt="on"] article[data-testid^="conversation-turn-"][data-cgpt-perf-cold="on"] {
   content-visibility: auto;
   contain-intrinsic-size: auto 720px;
 }
 
-html[data-cgpt-perf-opt="on"][data-cgpt-perf-fallback="on"] [data-message-author-role] {
+html[data-cgpt-perf-opt="on"][data-cgpt-perf-fallback="on"] [data-message-author-role][data-cgpt-perf-cold="on"] {
   content-visibility: auto;
   contain-intrinsic-size: auto 640px;
 }
