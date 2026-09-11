@@ -85,7 +85,9 @@
         ? globalThis.performance.now()
         : 0);
 
-    const items = [];
+    const slots = new Array(maxItems);
+    let writeIndex = 0;
+    let size = 0;
 
     function normalizeEvent(event = {}) {
       const normalized = {};
@@ -104,16 +106,30 @@
       return normalized;
     }
 
-    function prune(referenceWallMs = nowWall()) {
+    function append(normalized) {
+      slots[writeIndex] = normalized;
+      writeIndex = (writeIndex + 1) % maxItems;
+      if (size < maxItems) size += 1;
+    }
+
+    function snapshotAll() {
+      const result = [];
+      const start = (writeIndex - size + maxItems) % maxItems;
+      for (let index = 0; index < size; index += 1) {
+        const item = slots[(start + index) % maxItems];
+        if (item) result.push(item);
+      }
+      return result;
+    }
+
+    function activeEvents(referenceWallMs = nowWall()) {
       const cutoff = finiteNumber(referenceWallMs) - windowMs;
-      while (items.length && finiteNumber(items[0].wallTimeMs) < cutoff) items.shift();
-      if (items.length > maxItems) items.splice(0, items.length - maxItems);
+      return snapshotAll().filter((item) => finiteNumber(item.wallTimeMs) >= cutoff);
     }
 
     function record(event) {
       const normalized = normalizeEvent(event);
-      items.push(normalized);
-      prune(normalized.wallTimeMs);
+      append(normalized);
       return normalized;
     }
 
@@ -127,9 +143,11 @@
 
     function hydrate(events) {
       if (!Array.isArray(events)) return 0;
+      const existing = snapshotAll();
       const seen = new Set(
-        items.map((item) => `${item.wallTimeMs}|${item.perfTimeMs}|${item.kind}|${item.duration || ""}`)
+        existing.map((item) => `${item.wallTimeMs}|${item.perfTimeMs}|${item.kind}|${item.duration || ""}`)
       );
+      const merged = existing.slice();
       let added = 0;
 
       for (const event of events) {
@@ -138,24 +156,32 @@
         const key = `${normalized.wallTimeMs}|${normalized.perfTimeMs}|${normalized.kind}|${normalized.duration || ""}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        items.push(normalized);
+        merged.push(normalized);
         added += 1;
       }
 
-      items.sort((a, b) => a.wallTimeMs - b.wallTimeMs || a.perfTimeMs - b.perfTimeMs);
-      prune();
+      const cutoff = finiteNumber(nowWall()) - windowMs;
+      const retained = merged
+        .filter((item) => finiteNumber(item.wallTimeMs) >= cutoff)
+        .sort((a, b) => a.wallTimeMs - b.wallTimeMs || a.perfTimeMs - b.perfTimeMs)
+        .slice(-maxItems);
+
+      slots.fill(undefined);
+      writeIndex = 0;
+      size = 0;
+      for (const item of retained) append(item);
       return added;
     }
 
     function events() {
-      prune();
-      return items.map((item) => ({ ...item }));
+      return activeEvents().map((item) => ({ ...item }));
     }
 
     function latestMarker(kinds) {
       const accepted = new Set(Array.isArray(kinds) ? kinds : [kinds]);
-      for (let index = items.length - 1; index >= 0; index -= 1) {
-        const item = items[index];
+      const current = activeEvents();
+      for (let index = current.length - 1; index >= 0; index -= 1) {
+        const item = current[index];
         if (item && item.marker === true && accepted.has(item.kind)) return { ...item };
       }
       return null;
@@ -165,7 +191,7 @@
       const minDurationMs = Math.max(1, finiteNumber(config.minDurationMs, 100));
       const minCount = Math.max(2, Math.floor(finiteNumber(config.minCount, 3)));
       const clusterWindowMs = Math.max(100, finiteNumber(config.windowMs, 2000));
-      const blocking = items.filter((item) => (
+      const blocking = activeEvents().filter((item) => (
         (item.kind === "long-animation-frame" || item.kind === "longtask") &&
         finiteNumber(item.duration) >= minDurationMs
       ));
@@ -201,23 +227,20 @@
     }
 
     function exportRecent(referenceWallMs = nowWall()) {
-      prune(referenceWallMs);
-      const cutoff = finiteNumber(referenceWallMs) - windowMs;
       return {
         marker: null,
-        events: items.filter((item) => item.wallTimeMs >= cutoff).map((item) => ({ ...item }))
+        events: activeEvents(referenceWallMs).map((item) => ({ ...item }))
       };
     }
 
     function exportAroundLatestMarker(kinds, beforeMs = 10_000, afterMs = 20_000) {
-      prune();
       const marker = latestMarker(kinds);
       if (!marker) return { marker: null, events: [] };
       const start = marker.wallTimeMs - Math.max(0, finiteNumber(beforeMs));
       const end = marker.wallTimeMs + Math.max(0, finiteNumber(afterMs));
       return {
         marker,
-        events: items
+        events: activeEvents(marker.wallTimeMs + Math.max(0, finiteNumber(afterMs)))
           .filter((item) => item.wallTimeMs >= start && item.wallTimeMs <= end)
           .map((item) => ({ ...item }))
       };
