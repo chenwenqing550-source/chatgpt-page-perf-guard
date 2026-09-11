@@ -24,6 +24,12 @@
     historyFile: document.getElementById("historyFile"),
     importStatus: document.getElementById("importStatus"),
     toggle: document.getElementById("optimizationToggle"),
+    prepareHandoff: document.getElementById("prepareHandoffButton"),
+    handoffStatus: document.getElementById("handoffStatus"),
+    activityState: document.getElementById("activityState"),
+    probeState: document.getElementById("probeState"),
+    selfWork: document.getElementById("selfWork"),
+    recentIncident: document.getElementById("recentIncident"),
     windowPressure: document.getElementById("windowPressure"),
     coverage: document.getElementById("coverage"),
     blocking: document.getElementById("blocking"),
@@ -56,6 +62,17 @@
     return "UNKNOWN";
   }
 
+  function activityLabel(state) {
+    const map = {
+      quiet: "安静",
+      generating: "生成中·已让路",
+      scrolling: "滚动中·已让路",
+      busy: "繁忙·最低干扰",
+      background: "后台休眠"
+    };
+    return map[state] || "UNKNOWN";
+  }
+
   function pageAdviceLabel(state) {
     const map = {
       sampling: "采样中",
@@ -86,16 +103,28 @@
     return `${n} B`;
   }
 
+  function latestBlockingIncident(metrics) {
+    const incidents = Array.isArray(metrics.recentIncidents)
+      ? metrics.recentIncidents
+      : [];
+    for (let i = incidents.length - 1; i >= 0; i -= 1) {
+      const item = incidents[i];
+      if (!item) continue;
+      if (item.kind === "long-animation-frame" || item.kind === "longtask") {
+        return `${Math.round(Number(item.duration) || 0)} ms`;
+      }
+    }
+    return "暂无 ≥50 ms 事件";
+  }
+
   function renderReasons(metrics) {
     const reasons = Core.reasonsFor(metrics);
     const fragment = document.createDocumentFragment();
-
     for (const reason of reasons) {
       const li = document.createElement("li");
       li.textContent = reason;
       fragment.appendChild(li);
     }
-
     els.reasons.replaceChildren(fragment);
   }
 
@@ -112,30 +141,19 @@
       els.historyDepth.textContent = "未匹配";
       els.historyNote.textContent = "导入快照不属于当前聊天窗口";
       els.historyStats.classList.remove("hidden");
-      els.historyStats.textContent =
-        `快照消息 ${calibration.messageCount} 条 · 已忽略历史校准`;
+      els.historyStats.textContent = `快照消息 ${calibration.messageCount} 条 · 已忽略历史校准`;
       return;
     }
 
     els.historyDepth.textContent = depthLabel(calibration.depthLevel);
-    const sourceLabel =
-      calibration.sourceKind === "openai_export"
-        ? "OpenAI 官方导出"
-        : "Context Bridge";
-    els.historyNote.textContent =
-      `${sourceLabel}校准 · 不等于模型上下文占用`;
+    const sourceLabel = calibration.sourceKind === "openai_export"
+      ? "OpenAI 官方导出"
+      : "Context Bridge";
+    els.historyNote.textContent = `${sourceLabel}校准 · 不等于模型上下文占用`;
     els.historyStats.classList.remove("hidden");
 
-    const assetText =
-      calibration.assetCount == null
-        ? "UNKNOWN"
-        : String(calibration.assetCount);
-
-    const branchText =
-      calibration.activeBranchCounted
-        ? "活动分支"
-        : "可见映射";
-
+    const assetText = calibration.assetCount == null ? "UNKNOWN" : String(calibration.assetCount);
+    const branchText = calibration.activeBranchCounted ? "活动分支" : "可见映射";
     els.historyStats.textContent =
       `${branchText}消息 ${calibration.messageCount} 条 · ` +
       `用户 ${calibration.userMessages} · 助手 ${calibration.assistantMessages} · ` +
@@ -156,6 +174,10 @@
     els.recommendationNote.textContent = "请先打开或刷新 chatgpt.com。";
     els.reasons.replaceChildren();
     renderHistory(null);
+    els.activityState.textContent = "UNKNOWN";
+    els.probeState.textContent = "UNKNOWN";
+    els.selfWork.textContent = "UNKNOWN";
+    els.recentIncident.textContent = "UNKNOWN";
     els.windowPressure.textContent = "UNKNOWN";
     els.coverage.textContent = "UNKNOWN";
     els.blocking.textContent = "UNKNOWN";
@@ -167,6 +189,7 @@
     els.signalCoverage.textContent = "--";
     els.interactionCount.textContent = "--";
     els.toggle.disabled = true;
+    els.prepareHandoff.disabled = true;
   }
 
   function render(metrics) {
@@ -186,6 +209,7 @@
     });
 
     els.notice.classList.add("hidden");
+    els.prepareHandoff.disabled = false;
 
     if (metrics.status === "sampling") {
       setPill("采样中", "good");
@@ -193,6 +217,8 @@
       setPill("建议换窗", "bad");
     } else if (combined.state === "prepare" || combined.state === "heavy") {
       setPill("窗口偏重", "warn");
+    } else if (metrics.activityState && metrics.activityState !== "quiet") {
+      setPill("主动让路", "warn");
     } else if (metrics.transientBusy) {
       setPill("临时繁忙", "warn");
     } else {
@@ -219,61 +245,46 @@
           : combined.state === "prepare" || combined.state === "heavy"
             ? "warn"
             : "good";
-
       els.recommendation.textContent = combined.title;
       els.recommendation.className = `recommendation ${combinedLevel}`;
       els.recommendationNote.textContent = combined.note;
     } else {
       els.recommendation.textContent = rec.title;
       els.recommendation.className = `recommendation ${rec.level}`;
-      els.recommendationNote.textContent =
-        `${rec.note} · 历史深度 UNKNOWN`;
+      els.recommendationNote.textContent = `${rec.note} · 历史深度 UNKNOWN`;
     }
 
     renderReasons(metrics);
     renderHistory(metrics.historyCalibration || null);
 
-    els.windowPressure.textContent =
-      valueOrUnknown(metrics.windowPressure, "%");
-    els.coverage.textContent =
-      valueOrUnknown(metrics.coverage, "%");
-    els.blocking.textContent =
-      valueOrUnknown(metrics.blockingRatio, "%");
-    els.jank.textContent =
-      valueOrUnknown(metrics.jankRatio, "%");
-    els.eventLatency.textContent =
-      valueOrUnknown(metrics.eventLatencyMs, " ms");
-    els.drift.textContent =
-      valueOrUnknown(metrics.driftMs, " ms");
-    els.loadedBlocks.textContent =
-      String(Number(metrics.loadedBlocks || 0));
-    els.structure.textContent =
-      structureLabel(metrics.structureMode);
-    els.signalCoverage.textContent =
-      `${Number(metrics.supportedSignals || 0)}/${Number(metrics.expectedSignals || 4)}`;
-    els.interactionCount.textContent =
-      String(Number(metrics.interactionCount || 0));
+    els.activityState.textContent = activityLabel(metrics.activityState);
+    els.probeState.textContent = metrics.activeProbeSuppressed ? "已让路" : "允许轻量探针";
+    els.selfWork.textContent = valueOrUnknown(metrics.selfWorkMs, " ms");
+    els.recentIncident.textContent = latestBlockingIncident(metrics);
+    els.windowPressure.textContent = valueOrUnknown(metrics.windowPressure, "%");
+    els.coverage.textContent = valueOrUnknown(metrics.coverage, "%");
+    els.blocking.textContent = valueOrUnknown(metrics.blockingRatio, "%");
+    els.jank.textContent = valueOrUnknown(metrics.jankRatio, "%");
+    els.eventLatency.textContent = valueOrUnknown(metrics.eventLatencyMs, " ms");
+    els.drift.textContent = valueOrUnknown(metrics.driftMs, " ms");
+    els.loadedBlocks.textContent = String(Number(metrics.loadedBlocks || 0));
+    els.structure.textContent = structureLabel(metrics.structureMode);
+    els.signalCoverage.textContent = `${Number(metrics.supportedSignals || 0)}/${Number(metrics.expectedSignals || 4)}`;
+    els.interactionCount.textContent = String(Number(metrics.interactionCount || 0));
 
     els.toggle.checked = Boolean(metrics.optimizationEnabled);
     els.toggle.disabled = false;
   }
 
   async function resolveActiveTab() {
-    const tabs = await WebExt.tabs.query({
-      active: true,
-      currentWindow: true
-    });
+    const tabs = await WebExt.tabs.query({ active: true, currentWindow: true });
     activeTabId = tabs && tabs[0] ? tabs[0].id : null;
     return activeTabId;
   }
 
   async function send(type, extra = {}) {
-    if (activeTabId == null) {
-      await resolveActiveTab();
-    }
-    if (activeTabId == null) {
-      throw new Error("No active tab");
-    }
+    if (activeTabId == null) await resolveActiveTab();
+    if (activeTabId == null) throw new Error("No active tab");
     return WebExt.tabs.sendMessage(activeTabId, { type, ...extra });
   }
 
@@ -291,13 +302,31 @@
   els.toggle.addEventListener("change", async () => {
     const desired = els.toggle.checked;
     els.toggle.disabled = true;
-
     try {
       const response = await send("toggleOptimization", { enabled: desired });
       if (!response || !response.ok) throw new Error("Toggle failed");
       await refresh();
     } catch (_) {
       showUnavailable();
+    }
+  });
+
+  els.prepareHandoff.addEventListener("click", async () => {
+    els.prepareHandoff.disabled = true;
+    els.handoffStatus.className = "import-status";
+    els.handoffStatus.classList.remove("hidden");
+    els.handoffStatus.textContent = "正在准备结构化交接指令…";
+    try {
+      const response = await send("prepareHandoffPrompt");
+      if (!response || !response.ok) {
+        throw new Error(response && response.error ? response.error : "准备失败");
+      }
+      els.handoffStatus.textContent = "已填入当前输入框。请检查后手动发送；扩展不会自动发送或新建聊天。";
+    } catch (error) {
+      els.handoffStatus.className = "import-status bad";
+      els.handoffStatus.textContent = `准备失败：${error && error.message ? error.message : "UNKNOWN"}`;
+    } finally {
+      els.prepareHandoff.disabled = false;
     }
   });
 
@@ -315,21 +344,11 @@
     els.importStatus.textContent = "正在本机解析…";
 
     try {
-      if (file.size > Core.CONFIG.MAX_IMPORT_BYTES) {
-        throw new Error("文件超过 32 MB 安全上限");
-      }
-
+      if (file.size > Core.CONFIG.MAX_IMPORT_BYTES) throw new Error("文件超过 32 MB 安全上限");
       const raw = await file.text();
       const payload = JSON.parse(raw);
-      const summary = Core.extractHistorySummary(
-        payload,
-        file.size,
-        currentConversationId
-      );
-
-      if (!summary.valid) {
-        throw new Error(summary.error || "窗口分析 JSON 无效");
-      }
+      const summary = Core.extractHistorySummary(payload, file.size, currentConversationId);
+      if (!summary.valid) throw new Error(summary.error || "窗口分析 JSON 无效");
 
       const response = await send("setHistoryCalibration", { summary });
       if (!response || !response.ok) {
@@ -337,31 +356,23 @@
       }
 
       if (response.calibration && response.calibration.matchesCurrentConversation) {
-        els.importStatus.textContent =
-          `校准成功：${summary.messageCount} 条结构化消息，历史深度 ${depthLabel(summary.depthLevel)}。`;
+        els.importStatus.textContent = `校准成功：${summary.messageCount} 条结构化消息，历史深度 ${depthLabel(summary.depthLevel)}。`;
       } else {
         els.importStatus.className = "import-status bad";
-        els.importStatus.textContent =
-          "文件已解析，但 conversation ID 与当前窗口不匹配；历史校准不会参与建议。";
+        els.importStatus.textContent = "文件已解析，但 conversation ID 与当前窗口不匹配；历史校准不会参与建议。";
       }
-
       await refresh();
     } catch (error) {
       els.importStatus.className = "import-status bad";
-      els.importStatus.textContent =
-        `导入失败：${error && error.message ? error.message : "UNKNOWN"}`;
+      els.importStatus.textContent = `导入失败：${error && error.message ? error.message : "UNKNOWN"}`;
     }
   });
 
   refresh().finally(() => {
-    refreshTimer = setInterval(refresh, 1000);
+    refreshTimer = setInterval(refresh, 2000);
   });
 
-  window.addEventListener(
-    "unload",
-    () => {
-      if (refreshTimer) clearInterval(refreshTimer);
-    },
-    { once: true }
-  );
+  window.addEventListener("unload", () => {
+    if (refreshTimer) clearInterval(refreshTimer);
+  }, { once: true });
 })();

@@ -1,30 +1,51 @@
-# Security Policy
+# Security & Privacy — v1.7.0
 
-## 支持版本
+## Hard constraints
 
-当前只维护最新版本。首个公开版本为 v1.6.1 Pre-release。
+本扩展保持本机、最小权限设计：
 
-## 威胁模型
+- 不发起网络请求；
+- 不使用 fetch / XHR / WebSocket / EventSource；
+- 不使用 Cookie API；
+- 不使用 localStorage / sessionStorage / IndexedDB / extension storage；
+- 不使用 `eval` / `new Function`；
+- 无 background service；
+- content script 仅匹配 `https://chatgpt.com/*`。
 
-该扩展运行在 `chatgpt.com` 的 Content Script 上，因此理论上具备读取匹配页面 DOM 的技术能力。安全目标不是声称“没有访问能力”，而是把能力限制在最小范围，并让源码可审计。
+## Performance diagnostics
 
-v1.6.1 的安全约束：
+诊断 ring buffer 仅在当前页面内存中存在，刷新后清除。只记录时间、状态、耗时、mutation 数、页面压力、扩展自耗时和优化状态。
 
-- 无联网 API；
-- 无远程代码加载；
-- 无 `eval` / `new Function`；
-- 无 Cookie API；
-- 无持久化浏览器存储；
-- 无后台 Service Worker；
-- Manifest 不声明额外 permissions / host_permissions；
-- JSON 导入只解析本地文件，原始内容不上传；
-- 导入上限 32 MiB；
-- 多会话导出无法精确匹配当前 conversation ID 时拒绝校准。
+禁止记录：
 
-## 不应提交的材料
+- 聊天正文；
+- `innerText` / message body；
+- 账号 Cookie；
+- 凭据、Token、Authorization header；
+- 可用于重建聊天内容的完整 DOM 快照。
 
-Issue、PR、公开仓库中不要提交真实会话导出、Cookie、Token、API Key、Session、浏览器配置目录或其他敏感内容。若漏洞复现必须依赖真实对话，请先最小化并脱敏。
+## Handoff
 
-## 漏洞报告
+“准备换窗交接”只向当前 ChatGPT composer 写入一条结构化提炼指令。
 
-请优先提交不包含私人数据的最小复现。高风险问题（例如出现联网外传、任意代码执行、意外读取并持久化聊天正文）应在公开披露前先私下联系维护者。
+明确禁止：
+
+- 自动点击发送；
+- `form.submit()` / `requestSubmit()`；
+- 模拟 Enter / KeyboardEvent；
+- 自动 `window.open()` 新聊天；
+- 默认程序化遍历完整聊天 DOM 做本地压缩。
+
+用户仍需检查输入框内容并手动发送。
+
+## Imported history JSON
+
+用户显式导入的 OpenAI 官方会话 JSON / Context Bridge JSON 仅在本机解析结构元数据。多会话导出无法准确定位当前 conversation ID 时 Fail-Closed。
+
+## Supply chain
+
+项目无运行时第三方依赖。开发测试使用 Node.js 内置 `node:test`，降低依赖供应链面。
+
+## Automated guards
+
+`tests/security.test.js` 对运行时代码扫描禁止能力，并单独检查 handoff 不包含自动发送/新开聊天路径。

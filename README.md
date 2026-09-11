@@ -1,235 +1,136 @@
-# ChatGPT Page Performance Guard
+# ChatGPT 页面性能助手
 
-> 中文产品名：**ChatGPT 页面性能助手**  
-> 当前版本：**v1.6.1**  
-> 形态：Manifest V3 WebExtension，默认完全本机运行。
+当前版本：**v1.7.0**
 
-一个面向长时间 ChatGPT 网页会话的轻量浏览器扩展：观察页面侧性能压力、减少屏外历史消息的渲染开销，并在证据足够时给出“是否该换新窗口”的页面侧建议。
+这是一个本机运行的 ChatGPT 长聊天页面性能辅助扩展。目标不是“测模型还剩多少上下文”，而是尽量减少长页面自身的渲染与监控开销、识别短时卡顿，并在窗口持续变重时提供安全的换窗交接路径。
 
-**它不是 token 计数器，也不会把浏览器压力伪装成模型上下文占用率。** 无法从公开、可验证数据得出的信息会明确显示 `UNKNOWN`。
+> 页面压力 ≠ 模型上下文占用。ChatGPT 没有向网页提供可验证的实时模型上下文占用数据；无法可靠获得时，本扩展始终显示 `UNKNOWN`，不会伪造百分比。
 
-> 本项目不是 OpenAI 官方产品，与 OpenAI 无隶属、赞助或背书关系。ChatGPT 是 OpenAI 的商标。
+## v1.7.0 核心变化
 
-## 界面预览
+### 1. 页面越忙，扩展自己越让路
 
-> 下图根据真实扩展截图提取关键区域并重新排版，便于 README 阅读；不是逐像素复刻。
+运行状态分为：
 
-<table>
-<tr>
-<td width="50%"><img src="docs/images/popup-overview.svg" alt="页面压力、换窗建议、历史深度" width="360"></td>
-<td width="50%"><img src="docs/images/popup-details.svg" alt="详细性能指标" width="360"></td>
-</tr>
-</table>
+- `quiet`：正常被动监控；必要时允许很低频的 fallback 探针。
+- `generating`：页面高频增长时暂停 coverage / 布局类主动工作。
+- `scrolling`：滚动时停止主动布局工作。
+- `busy`：发送、生成、滚动或长帧高峰时进入最低干扰模式。
+- `background`：后台标签页仅保留恢复所需的最小状态。
 
-## 它解决什么问题
+发送/输入等用户交互后还有约 2.5 秒保护窗，避免扩展在 ChatGPT 正在提交消息、插入新 DOM 和自动滚动时参与主线程竞争。
 
-超长聊天窗口变卡，通常不是一个单变量问题。页面 DOM 数量、浏览器当前负载、主线程阻塞、动画帧延迟、交互响应、后台程序、上传/工具执行都会影响体感。与此同时，网页端并没有提供一个可信的“当前模型上下文已经用了多少 token”实时接口。
+### 2. 不再对整个聊天一刀切 `content-visibility`
 
-因此本项目把三个概念严格分开：
+v1.7.0 只会冷却：
 
-1. **页面压力**：根据浏览器本机性能信号计算的工程估算值。
-2. **历史深度**：只有用户主动导入结构化会话 JSON 时才估算；默认 `UNKNOWN`。
-3. **模型上下文占用**：没有可靠官方实时数据时始终 `UNKNOWN`。
+- 已由 `IntersectionObserver` 确认远离视口；
+- 已稳定一段时间；
+- 不是最后两条消息；
+- 最近没有发生内容变化；
+- 当前页面不处于滚动/生成/繁忙状态。
 
-这种设计宁可少报，也不把“看起来像数字”的推测包装成事实。
+近视口采用较大的预热区，正在增长的消息会立即保持正常渲染。浏览器不支持可靠的可见性观察时，宁可不启用这项冷却，也不强行做批量布局扫描。
 
-## 工作原理
+### 3. 更精准的短期诊断
 
-### 1. 页面压力：多信号加权，不读聊天正文
+优先使用浏览器被动性能信号：
 
-扩展在 `chatgpt.com` 的 Content Script 中采集四类页面侧信号：
+- Long Animation Frame / Long Task；
+- Event Timing 交互样本；
+- timer drift；
+- DOM mutation 速率；
+- 当前 `quiet / generating / scrolling / busy / background` 状态；
+- 扩展自身本轮主动工作耗时。
 
-- **页面阻塞**：优先使用 Long Animation Frame；不支持时回退 Long Task；两者都不可用时为 `UNKNOWN`。
-- **掉帧比例**：短时 `requestAnimationFrame` 采样中，帧间隔超过约 33.4ms 记为抖动样本。
-- **定时器漂移**：比较预期计时与实际回调时间，观察主线程是否长期繁忙。
-- **交互响应样本**：浏览器支持 Event Timing 时，按 `interactionId` 去重并取高分位响应时长。这里不是官方 INP，只作为本机交互样本。
+最近诊断只保存在页面内存的 bounded ring buffer 中，只记录时间、耗时、状态和数值，不记录聊天正文，不上传，不持久化。刷新页面后自动消失。
 
-各信号先被归一化为 0–100 的严重度，再按有效信号重新归一化权重：
+### 4. 内置「换窗交接」
 
-```text
-阻塞严重度        35%
-掉帧严重度        20%
-定时器漂移        15%
-交互响应          30%
-```
+Popup 中的 **准备换窗交接** 会把一条结构化提炼指令填入当前 ChatGPT 输入框，由当前模型基于它已经持有的会话上下文生成新窗口交接包。
 
-某一项不可测时，不会拿 `0` 冒充“表现完美”，而是从本轮权重中移除。
+交接模板要求显式区分：
 
-### 2. 近 90 秒窗口压力：抑制瞬时尖峰
+- `CURRENT`
+- `VERIFIED`
+- `PENDING`
+- `BLOCKED`
+- `HISTORICAL`
+- `REJECTED`
 
-页面压力会进入约 90 秒的短历史窗口，再组合：
+并优先保护 `repo / branch / exact SHA / version / test result / 下一步 / Stop Rule` 等工程身份。
 
-```text
-平均压力           55%
-P75 压力           20%
-高压样本占比       15%
-当前加载 DOM 规模   5%
-当前瞬时压力        5%
-```
+**它不会压缩当前服务端上下文本体。** 这是“旧窗口提炼 → 用户确认 → 新窗口继续”的 handoff，不是把当前会话的服务端 token 原地缩小。
 
-DOM 规模只占 5%，因为“浏览器当前加载的对话块”不能代表完整聊天历史。
+扩展不会：
 
-对于刚打开页面时的短时尖峰、孤立的高负载，本项目会做降权，避免一次上传、一次工具调用或后台抖动就直接提示换窗。
+- 自动抓取完整聊天正文做本地压缩；
+- 自动点击发送；
+- 自动模拟 Enter；
+- 自动新建聊天。
 
-### 3. 换窗状态机：持续高压升级 + 恢复滞回
+## 安全与隐私
 
-建议不是简单的 `pressure > X`：
+v1.7.0 继续保持：
 
-- `normal`：正常使用。
-- `heavy`：页面开始变重，继续观察。
-- `prepare`：持续偏高，建议准备换窗。
-- `switch`：持续高负载，建议换新窗口。
-- `urgent`：持续极高负载，强烈建议尽快换窗。
-- `sampling` / `transient`：采样不足或短时繁忙，不做过激建议。
+- 零网络请求；
+- 零遥测；
+- 零聊天正文持久化；
+- 无 background service；
+- 无 Cookie API；
+- 无 localStorage / sessionStorage / IndexedDB / extension storage；
+- 无 `eval` / `new Function`。
 
-升级要求压力持续一段时间；从高等级恢复也需要一段低压时间。这种**滞回**避免建议在阈值附近来回跳。
+内容脚本仅注入 `https://chatgpt.com/*`。
 
-### 4. 长聊天渲染优化
+## 历史深度校准
 
-开启“长聊天优化”后，仅对已识别到的历史消息块添加：
+可选导入：
 
-```css
-content-visibility: auto;
-contain-intrinsic-size: auto 720px;
-```
+- OpenAI 官方 `conversations.json` / 单会话 JSON；
+- Context Bridge JSON。
 
-浏览器可以跳过屏外内容的部分布局与绘制工作，需要显示时再恢复渲染。扩展**不会删除、截断或隐藏聊天消息的数据节点**。
+扩展只在本机提取结构元数据做历史深度工程估算。多会话文件无法按当前 conversation ID 精确定位时会 Fail-Closed，不猜测“最像哪个会话”。
 
-主选择器是：
+历史深度仍然不等于模型上下文占用。
 
-```text
-article[data-testid^="conversation-turn-"]
-```
+## 安装开发版
 
-如果 ChatGPT DOM 结构变化，会降级到 `[data-message-author-role]`；再识别不到则只监控性能，不冒险修改未知结构。
+1. 获取仓库的 `extension/` 目录。
+2. Chrome / Edge / Brave 打开扩展管理页。
+3. 开启开发者模式。
+4. 选择“加载已解压的扩展程序”。
+5. 指向 `extension/` 目录。
+6. 已经打开的 ChatGPT 标签页需要刷新一次，让新版 content script 生效。
 
-### 5. 可选历史深度校准
+## 本地验证
 
-用户可以主动导入：
-
-- OpenAI 官方 `conversations.json`；
-- 单会话 JSON；
-- `CHATGPT_CONTEXT_BRIDGE` JSON。
-
-解析只发生在当前浏览器进程内存中，不上传、不持久化。多会话官方导出必须能按当前 conversation ID 精确匹配，否则 Fail-Closed，不猜“哪个最像”。
-
-历史深度目前采用工程阈值：
-
-| 深度 | 结构化消息 | 工具消息 |
-| --- | ---: | ---: |
-| 较浅 | `< 250` | `< 100` |
-| 中等 | `250–699` | `100–299` |
-| 较深 | `700–1499` | `300–699` |
-| 很深 | `>= 1500` | `>= 700` |
-
-这些阈值**不是 OpenAI 官方 token 阈值**，只用于判断“这个会话结构是不是已经很深”。
-
-## 隐私与安全模型
-
-v1.6.1 的默认运行面刻意很窄：
-
-- 只匹配 `https://chatgpt.com/*`。
-- Manifest 不声明 `permissions` 或 `host_permissions`。
-- 无后台 Service Worker。
-- 不调用 `fetch` / XHR / WebSocket / EventSource。
-- 不使用 Cookie API。
-- 不使用 `localStorage` / `sessionStorage` / IndexedDB / `chrome.storage`。
-- 不使用 `eval` 或 `new Function`。
-- 不上传遥测。
-- 导入 JSON 只在内存中解析，刷新页面后校准状态消失。
-
-需要明确的是：Content Script 为了检测 DOM 结构，技术上能够读取匹配页面的 DOM。安全保证来自**源码最小化、无联网路径、自动安全测试和可审计发布包**，而不是“完全没有页面访问能力”这种不准确宣传。
-
-更多见 [security.md](docs/security.md)。
-
-## 浏览器 / 系统兼容性
-
-| 环境 | 状态 | 说明 |
-| --- | --- | --- |
-| Chrome / Edge / Brave 等 Chromium（Windows） | ✅ 一级支持 | 当前主要实测目标 |
-| Chromium（macOS / Linux） | ✅ 预期兼容 | 无 OS 专属 API；仍建议按目标浏览器实测 |
-| Firefox Desktop | 🟡 源码兼容 | v1.6.1 已兼容 `browser.*`；正式 AMO 签名还需 Firefox 专用 manifest 元数据 |
-| Safari macOS | 🟡 需单独打包 | WebExtension 源码可作为输入，但需 Apple 的 Safari Web Extension packager / Xcode |
-| Firefox Android / Safari iOS | ⚪ 未宣称支持 | 尚未做触屏、移动布局及商店分发验收 |
-
-`content-visibility` 已进入较新的跨浏览器基线，但旧浏览器可能不支持；Long Animation Frame 仍不是所有主流浏览器都有，因此代码会运行时检测支持情况并降级。详见 [docs/compatibility.md](docs/compatibility.md)。
-
-## 安装
-
-### Chromium：开发者模式安装
-
-1. 下载 Release 中的 `chatgpt-page-perf-guard-v1.6.1-install.zip`。
-2. 解压到一个固定目录。Release ZIP 的根目录直接包含扩展运行文件；仓库中的对应源文件位于 `extension/`，打包时归档其内部内容，不要把 `extension/` 目录再包一层。
-3. 打开 `chrome://extensions/` 或 `edge://extensions/`。
-4. 开启“开发者模式”。
-5. 选择“加载已解压的扩展程序”，指向解压目录。
-6. 打开或刷新 `https://chatgpt.com/`。
-
-### Firefox：临时测试
-
-源码逻辑已经兼容 `browser.*`。在 `about:debugging` 可以做开发测试；如果要通过 AMO 正式发布/签名，需要补充 Firefox 专用 `browser_specific_settings.gecko.id` 和数据收集声明，见兼容文档。
-
-### Safari
-
-Safari 分发不是把 Chromium ZIP 直接拖进去。需要在 macOS 上使用 Apple 提供的 Safari Web Extension packager 生成 Xcode 工程，再完成签名和发布。
-
-## 从源码验证
-
-测试只依赖 Node.js 内置测试框架，不需要第三方 npm 包：
+需要 Node.js 20+：
 
 ```bash
 npm test
 npm run check
 ```
 
-当前测试覆盖：
+测试覆盖：运行状态与让路、交互保护窗、远屏冷却守卫、handoff 安全边界、浏览器兼容降级、Manifest 最小权限、版本一致性和安全能力守卫。
 
-- 历史资产数 `UNKNOWN` 不得被错误变成 `0`；
-- `PerformanceObserver` 不存在时安全降级；
-- `browser.*` / `chrome.*` 命名空间兼容；
-- Manifest 最小权限约束；
-- 禁止联网、持久化存储、动态代码和 Cookie API 的静态安全守卫；
-- 版本号一致性。
+## 如何理解“刷新后又顺了”
 
-## 项目结构
+刷新会重建页面 DOM、脚本状态和布局状态，因此可能暂时恢复顺滑。v1.7.0 的目标不是宣称“永远不需要刷新”，而是：
 
-```text
-.
-├── .gitignore
-├── README.md
-├── LICENSE
-├── CHANGELOG.md
-├── package.json
-├── extension/
-│   ├── manifest.json    # MV3 清单
-│   ├── core.js           # 压力计算、状态机、历史 JSON 解析
-│   ├── monitor.js        # 页面采样、DOM 识别、消息接口
-│   ├── styles.css        # 屏外历史消息渲染优化
-│   └── popup.html/js/css  # 扩展面板
-├── docs/
-│   ├── architecture.md
-│   ├── compatibility.md
-│   ├── release-checklist.md
-│   ├── security.md
-│   └── images/
-└── tests/                # Node 内置测试
-```
+1. ChatGPT 正忙时扩展不再额外抢主线程；
+2. 避免全量屏外渲染优化造成布局修正；
+3. 用短期诊断记录判断卡顿附近扩展自身是否参与；
+4. 如果长窗口仍持续变重，提供高保真换窗交接，而不是无限死磕一个页面。
 
-## 已知限制
+## 兼容与边界
 
-- ChatGPT DOM 不是稳定公共 API，页面结构变化可能让选择器降级或失效。
-- 页面压力受整机负载影响，不是聊天长度的纯函数。
-- Performance Timeline 的 entry type 支持因浏览器而异；缺失信号会被标为不可测，而不是伪造为 0。
-- 官方会话导出的内部 schema 将来可能变化，解析器必须持续防御性维护。
-- “历史深度”是结构工程量，不等于模型实际上下文占用。
-- 扩展不能知道模型服务端实际裁剪了哪些上下文。
+主要目标浏览器：Chrome / Edge / Brave（Chromium）。Firefox/Safari 保留 WebExtension 命名空间兼容，但性能 API 支持程度可能不同；缺少可靠信号时显示 `UNKNOWN` 或安全降级。
 
-## 发布策略
+ChatGPT DOM 不是稳定公开 API。页面结构变化后，扩展会优先失效为“少做/不做”，而不是猜测操作错误节点。
 
-版本遵循 SemVer。每次发布前必须：版本号一致、CHANGELOG 已更新、测试全绿、JS 语法检查通过、安全守卫通过、安装 ZIP 只包含运行所需文件、SHA-256 已记录。详细清单见 [docs/release-checklist.md](docs/release-checklist.md)。
+## 项目状态
 
-v1.6.1 建议作为首个公开 **Pre-release**，在 Chrome/Edge/Firefox 实机收集兼容证据后再决定 Stable。
+**v1.7.0 是唯一当前版本和推荐基线。** 安装说明、功能说明与开发验证均以 v1.7.0 为准。
 
-## License
-
-MIT，见 [LICENSE](LICENSE)。
+本项目不是 OpenAI 官方产品。
