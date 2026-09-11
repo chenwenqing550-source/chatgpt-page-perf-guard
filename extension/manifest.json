@@ -18,6 +18,7 @@
       "js": [
         "core.js",
         "runtime.js",
+        "blackbox.js",
         "monitor.js",
         "handoff.js"
       ],
