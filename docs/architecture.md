@@ -1,63 +1,71 @@
-# 架构与算法说明
+# Architecture — v1.7.1 Candidate
 
-## 设计目标
+## 1. 目标
 
-本项目只回答浏览器页面侧能够合理回答的问题。核心原则是：
+v1.7.1 延续 v1.7.0 的核心原则：**页面越忙，扩展自己的主动工作越少。** 本候选新增诊断黑匣子，但不把页面压力、浏览器缓存或 JS 内存冒充模型上下文占用，也不顺手修改既有 cold-turn 优化算法。
 
-- 观测值与估算值分开；
-- 不可验证就 `UNKNOWN`；
-- 页面性能与模型上下文严格分离；
-- 不以扩大权限换取“看起来更聪明”的数字。
+## 2. 模块
 
-## 数据流
+- `core.js`：页面压力、90 秒窗口压力、换窗建议、历史深度校准与 UNKNOWN 语义。
+- `runtime.js`：纯函数运行状态机与基础 bounded ring buffer。
+- `blackbox.js`：固定容量/固定时间窗口的性能事件记录、字段清洗、严重事件簇、发送现场切片与导出 payload。
+- `monitor.js`：浏览器性能信号、页面活动感知、自让路采样、远屏冷却管理、黑匣子热路径接线与 quiet checkpoint 调度。
+- `background.js`：MV3 service worker；只负责按 tab 保存/读取/清除 `storage.session` 检查点，并对数据二次清洗和限量。
+- `handoff.js`：生成结构化换窗交接指令，并仅填入当前输入框。
+- `popup.js/html/css`：展示页面压力与黑匣子状态，提供历史校准、优化开关、手动事故标记、本地 JSON 导出和换窗交接入口。
 
-```text
-ChatGPT 页面
-   │
-   ├─ PerformanceObserver ──> 阻塞 / 交互样本
-   ├─ requestAnimationFrame -> 掉帧样本
-   ├─ setInterval ----------> 定时器漂移
-   └─ DOM 结构 --------------> 已加载块 / 屏外覆盖率
-                │
-                ▼
-             monitor.js
-                │
-                ▼
-              core.js
-  页面压力 -> 90 秒窗口压力 -> 状态机 / 可信度
-                │
-                ├──────────────┐
-                │              │
-                ▼              ▼
-             popup.js     可选历史 JSON
-                │              │
-                └──── 综合建议 ┘
-```
+## 3. 自让路生命周期
 
-## 页面压力
+状态输入包括：页面是否后台、最近滚动、mutation 速率、最近阻塞耗时、稳定时间和最近用户交互年龄。
 
-`core.js::calculatePagePressure()` 把原始信号映射到 0–100 的严重度后按权重组合。不可用的信号会被排除，剩余权重重新归一化。
+- `quiet`：允许完整被动观测和必要的低频 fallback；只有这里才允许低频 session checkpoint。
+- `generating`：DOM 高频变化；暂停主动帧探针、冷却维护和 checkpoint。
+- `scrolling`：滚动活跃；暂停主动布局/冷却维护和 checkpoint。
+- `busy`：发送/输入保护窗、高阻塞、生成+滚动等；进入最低干扰模式。
+- `background`：非必要页面采样和 checkpoint 休眠。
 
-阻塞、掉帧、漂移、交互响应采用不同归一化曲线，因为这些指标的量纲和“严重”含义不同。例如交互响应 100ms 以下视为低压力，200–500ms 逐步增加，1000ms 及以上饱和到 100。
+用户交互后约 2.5 秒内保持保护态，覆盖发送消息、用户消息插入、自动滚动和首轮回复 DOM 建立的高峰。
 
-## 窗口压力
+## 4. 性能信号与黑匣子热路径
 
-`calculateWindowPressure()` 只使用最近约 90 秒。平均值负责稳定，P75 和高压占比负责捕捉持续问题，DOM 规模只是弱信号。
+优先被动信号：Long Animation Frame、Long Task fallback、Event Timing、timer drift，以及 MutationObserver 的增量计数/计时。
 
-早期尖峰和孤立尖峰被标记 `transientBusy` 并限制升级，避免瞬时操作引发“立即换窗”。
+黑匣子直接复用这些既有事件，不新增 recurring monitor timer。发送/submit 只写 O(1) marker；scroll 事件做频率限制后只记录 `scrollX / scrollY` 等不会主动触发布局的值。热路径禁止 storage 写、JSON 序列化、全量 DOM 扫描和强制布局 API。
 
-## 建议状态机
+只有缺少 Long Animation Frame / Long Task 时，才允许在 `quiet` 状态低频运行短 rAF burst fallback。
 
-`nextRecommendationState()` 使用“进入阈值 + 持续时间 + 恢复滞回”。这比单一阈值更适合交互式网页：负载通常会随着上传、代码执行、图片渲染短暂升高。
+## 5. 远屏历史冷却
 
-## DOM 优化
+v1.7.1 保持 v1.7.0 算法：不对所有 conversation turn 统一 `content-visibility`。
 
-CSS 只在根节点存在 `data-cgpt-perf-opt="on"` 时生效。主结构匹配不到时才启用 fallback 标记。这样选择器失效时默认行为是**少优化**，而不是把未知节点误处理。
+`IntersectionObserver` 使用较大的 `rootMargin` 形成预热区。只有已确认在预热区外、页面稳定 quiet、turn 稳定至少 5 秒、不是最后两条消息、最近没有 mutation 且用户未关闭优化时，才添加 `data-cgpt-perf-cold="on"`。
 
-## 历史 JSON
+进入预热区或发生 mutation 时立即移除 cold 标记。浏览器不支持 IntersectionObserver 时，冷却覆盖保持 UNKNOWN/关闭，不用批量 `getBoundingClientRect()` 强行猜测。
 
-OpenAI 官方多会话导出只有在当前 URL 能解析 conversation ID 且找到精确匹配时才接受；否则返回错误。Context Bridge 数据优先沿 `current_node -> parent` 计算活动分支，避免把重试/编辑形成的旁支全部算进当前分支。
+## 6. 诊断黑匣子与 session checkpoint
 
-## 安全边界
+`blackbox.js` 保存最近约 10 分钟、最多 480 个性能事件。事件包含墙钟时间和页面 `performance` 时间，可记录发送/滚动、LoAF/LongTask 细节、Event Timing、活动状态、页面压力、mutation rate、扩展自耗时和优化状态；不记录聊天正文。
 
-没有后台进程、没有远程 endpoint、没有持久化状态。Popup 与 Content Script 只通过扩展运行时消息通信。导入文件在 Popup 读取后只把结构摘要发给当前标签页，不把原始 JSON 发送出去。
+`monitor.js` 从现有 update cycle 里、只在 `quiet` 状态且达到最小间隔时，把快照发给 `background.js`。background 只使用 `storage.session`，每个 tab 一个有界槽位。连续保存失败会暂停可选 checkpoint，避免诊断功能反过来制造压力。
+
+页面刷新后，恢复逻辑用墙钟年龄把旧事件重新映射到新的 `performance.now()` 时间轴，并与页面启动后已经出现的新事件按时间顺序合并。最近一次成功 checkpoint 之后尚未保存的事件仍可能丢失。
+
+## 7. 显式导出
+
+Popup 打开时只额外读取一次黑匣子状态，不把状态查询加入原有 2 秒 metrics 轮询。只有用户点击导出时才执行 `JSON.stringify`、创建 Blob/object URL 并触发本地文件保存；不使用网络或 downloads API。
+
+## 8. 换窗交接
+
+`handoff.js` 只构造结构化 prompt 并写入当前 composer。它不读取完整会话内容来做本地摘要，也不自动提交。交接保护 `CURRENT / VERIFIED / PENDING / BLOCKED / HISTORICAL / REJECTED` 及 exact repo/branch/SHA/version/test result/下一步/Stop Rule。
+
+这是一种 handoff，不是服务端上下文原地压缩。
+
+## 9. Fail-Closed
+
+- 缺失可靠性能信号 → `UNKNOWN`，不写 0。
+- 无法识别 ChatGPT 消息结构 → 不做远屏冷却。
+- 无法确认远屏 → 保持热状态。
+- checkpoint 连续失败 → 暂停可选 session 保存，保留页面内存记录。
+- 恢复到不同 conversation ID → 不混入当前窗口。
+- 无法匹配导入会话 ID → 不猜。
+- 找不到 composer → handoff 返回错误，不尝试其他有副作用路径。

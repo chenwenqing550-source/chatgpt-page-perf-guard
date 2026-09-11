@@ -2,18 +2,31 @@
   "use strict";
 
   const Core = globalThis.CGPTPerfCore;
-  if (!Core) return;
+  const Runtime = globalThis.CGPTPerfRuntime;
+  if (!Core || !Runtime) return;
 
   const WebExt = globalThis.browser || globalThis.chrome;
   if (!WebExt || !WebExt.runtime) return;
 
+  const BlackBox = globalThis.CGPTPerfBlackBox;
+  const blackBox = BlackBox && typeof BlackBox.createRecorder === "function"
+    ? BlackBox.createRecorder({ capacity: 480, maxAgeMs: 10 * 60 * 1000 })
+    : null;
+
   const WINDOW_MS = 10000;
   const UPDATE_MS = 2000;
   const DRIFT_INTERVAL_MS = 1000;
-  const FRAME_BURST_MS = 400;
-  const FRAME_BURST_EVERY_MS = 5000;
-  const COVERAGE_EVERY_MS = 8000;
-  const MAX_COVERAGE_SAMPLES = 120;
+  const FRAME_BURST_MS = 250;
+  const ACTIVE_PROBE_EVERY_MS = 15000;
+  const COLD_MAINTENANCE_EVERY_MS = 10000;
+  const COLD_STABLE_MS = 5000;
+  const MUTATION_WINDOW_MS = 1000;
+  const SCROLL_ACTIVE_MS = 700;
+  const DIAGNOSTIC_ITEMS = 60;
+  const SEND_MARKER_DEDUPE_MS = 500;
+  const BLACKBOX_SCROLL_SAMPLE_MS = 500;
+  const CHECKPOINT_INTERVAL_MS = 60 * 1000;
+  const CHECKPOINT_FAILURE_LIMIT = 3;
 
   const PerformanceObserverApi = globalThis.PerformanceObserver;
   const supportedEntryTypes = new Set(
@@ -23,30 +36,51 @@
   const supportsLoAF = supportedEntryTypes.has("long-animation-frame");
   const supportsLongTask = supportedEntryTypes.has("longtask");
   const supportsEventTiming = supportedEntryTypes.has("event");
+  const passiveSignalsAvailable = supportsLoAF || supportsLongTask;
 
   let optimizationEnabled = true;
   let firstSampleAt = performance.now();
   let lastTimerExpected = performance.now() + DRIFT_INTERVAL_MS;
-  let lastCoverageAt = 0;
-  let coverageEstimate = 0;
+  let lastColdMaintenanceAt = 0;
+  let coverageEstimate = null;
   let loadedBlocks = 0;
   let structureMode = "unknown";
   let recommendationState = "sampling";
   let historyCalibration = null;
   let totalUpdateTicks = 0;
   let foregroundUpdateTicks = 0;
+  let lastScrollAt = -Infinity;
+  let lastInteractionAt = -Infinity;
+  let lastMutationAt = -Infinity;
+  let lastBlockingAt = -Infinity;
+  let lastSendMarkerAt = -Infinity;
+  let lastBlackBoxScrollAt = -Infinity;
+  let lastCheckpointAt = -Infinity;
+  let lastCheckpointSignature = "";
+  let checkpointFailures = 0;
+  let checkpointSuspended = false;
+  let checkpointState = blackBox ? "memory-only" : "unavailable";
+  let selfWorkMs = 0;
+  let activityState = "quiet";
+  let activeProbeSuppressed = true;
+  let turnObserver = null;
 
   const blockingSamples = [];
   const frameSamples = [];
   const driftSamples = [];
+  const mutationSamples = [];
   const interactionSamples = new Map();
   const historySamples = [];
+  const incidents = Runtime.createRingBuffer(DIAGNOSTIC_ITEMS);
+  const trackedTurns = new Set();
+  const turnNearState = new WeakMap();
+  const turnMutationAt = new WeakMap();
 
   let latest = {
     pagePressure: null,
     windowPressure: 0,
     recommendationState: "sampling",
-    coverage: 0,
+    coverage: null,
     optimizationEnabled: true,
     status: "starting",
     blockingRatio: null,
@@ -63,28 +97,196 @@
     expectedSignals: 4,
     foregroundRatio: 0,
     sampledAt: firstSampleAt,
-    historyCalibration: null
+    historyCalibration: null,
+    activityState: "quiet",
+    activeProbeSuppressed: true,
+    selfWorkMs: 0,
+    recentIncidents: []
   };
 
   function pruneArray(samples, now, maxAge = WINDOW_MS) {
-    while (samples.length && now - samples[0].time > maxAge) {
-      samples.shift();
-    }
+    while (samples.length && now - samples[0].time > maxAge) samples.shift();
   }
 
   function pruneInteractions(now) {
     for (const [id, sample] of interactionSamples.entries()) {
-      if (now - sample.time > WINDOW_MS) {
-        interactionSamples.delete(id);
-      }
+      if (now - sample.time > WINDOW_MS) interactionSamples.delete(id);
     }
+  }
+
+  function pruneMutations(now) {
+    pruneArray(mutationSamples, now, MUTATION_WINDOW_MS);
+  }
+
+  function mutationRate(now) {
+    pruneMutations(now);
+    return mutationSamples.reduce((sum, item) => sum + item.count, 0);
+  }
+
+  function recentBlockingMs(now, maxAge = 1000) {
+    return blockingSamples.reduce(
+      (sum, item) => now - item.time <= maxAge ? sum + item.duration : sum,
+      0
+    );
+  }
+
+  function blackBoxTimes(perfTimeMs = performance.now()) {
+    const perfValue = Number(perfTimeMs) || 0;
+    const origin = Number(performance.timeOrigin);
+    const wallTimeMs = Number.isFinite(origin) && origin > 0
+      ? origin + perfValue
+      : Date.now();
+    return {
+      perfTimeMs: perfValue,
+      wallTimeMs: Math.max(0, Math.round(wallTimeMs))
+    };
+  }
+
+  function pageTimeOriginIso() {
+    const origin = Number(performance.timeOrigin);
+    if (!Number.isFinite(origin) || origin <= 0) return "";
+    try {
+      return new Date(origin).toISOString();
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function blackBoxStatus() {
+    if (!blackBox) return null;
+    const now = performance.now();
+    const events = blackBox.snapshot(now);
+    const clusters = blackBox.detectSevereClusters(now);
+    return {
+      eventCount: events.length,
+      lastSendMarker: blackBox.latestMarker("send", now),
+      lastManualMarker: blackBox.latestMarker("manual", now),
+      severeClusterCount: clusters.length,
+      latestSevereCluster: clusters.length ? clusters[clusters.length - 1] : null,
+      checkpointState
+    };
+  }
+
+  function requestExtensionMessage(message) {
+    if (!WebExt.runtime || typeof WebExt.runtime.sendMessage !== "function") {
+      return Promise.resolve(null);
+    }
+    try {
+      const result = WebExt.runtime.sendMessage(message);
+      return result && typeof result.then === "function"
+        ? result
+        : Promise.resolve(result || null);
+    } catch (_) {
+      return Promise.resolve(null);
+    }
+  }
+
+  function noteCheckpointFailure() {
+    checkpointFailures += 1;
+    checkpointState = "session-error";
+    if (checkpointFailures >= CHECKPOINT_FAILURE_LIMIT) {
+      checkpointSuspended = true;
+      checkpointState = "session-suspended";
+    }
+  }
+
+  function checkpointSignature(events) {
+    if (!events.length) return "";
+    const newest = events[events.length - 1];
+    return `${events.length}:${newest.wallTimeMs}:${newest.kind}`;
+  }
+
+  function maybeCheckpointBlackBox(now) {
+    if (!blackBox || checkpointSuspended || document.hidden) return;
+    if (activityState !== "quiet") return;
+    if (now - lastCheckpointAt < CHECKPOINT_INTERVAL_MS) return;
+
+    const events = blackBox.snapshot(now);
+    const signature = checkpointSignature(events);
+    if (!signature || signature === lastCheckpointSignature) return;
+
+    lastCheckpointAt = now;
+    const times = blackBoxTimes(now);
+    const checkpoint = {
+      schemaVersion: 1,
+      conversationId: currentConversationId(),
+      savedAt: times.wallTimeMs,
+      events
+    };
+
+    checkpointState = "session-saving";
+    requestExtensionMessage({ type: "saveBlackBoxCheckpoint", checkpoint })
+      .then((response) => {
+        if (!response || response.ok !== true) {
+          noteCheckpointFailure();
+          return;
+        }
+        checkpointFailures = 0;
+        lastCheckpointSignature = signature;
+        checkpointState = "session-saved";
+      })
+      .catch(() => {
+        noteCheckpointFailure();
+      });
+  }
+
+  function restoreBlackBoxCheckpoint() {
+    if (!blackBox || checkpointSuspended) return;
+    checkpointState = "session-loading";
+    requestExtensionMessage({ type: "loadBlackBoxCheckpoint" })
+      .then((response) => {
+        if (!response || response.ok !== true) {
+          if (response) noteCheckpointFailure();
+          else checkpointState = "memory-only";
+          return;
+        }
+        const checkpoint = response.checkpoint;
+        if (!checkpoint || !Array.isArray(checkpoint.events)) {
+          checkpointState = "session-empty";
+          return;
+        }
+        const currentId = currentConversationId();
+        if (currentId && checkpoint.conversationId && currentId !== checkpoint.conversationId) {
+          checkpointState = "session-mismatch";
+          return;
+        }
+        const now = performance.now();
+        const result = blackBox.restore(checkpoint.events, {
+          nowPerf: now,
+          wallTimeMs: blackBoxTimes(now).wallTimeMs
+        });
+        checkpointFailures = 0;
+        checkpointState = result.restored > 0 ? "session-restored" : "session-empty";
+        lastCheckpointSignature = checkpointSignature(blackBox.snapshot(now));
+      })
+      .catch(() => {
+        noteCheckpointFailure();
+      });
+  }
+
+  function activitySnapshot(now) {
+    const scrollActive = now - lastScrollAt < SCROLL_ACTIVE_MS;
+    const stableAnchor = Math.max(lastScrollAt, lastInteractionAt, lastMutationAt, lastBlockingAt);
+    const stableForMs = Number.isFinite(stableAnchor) ? Math.max(0, now - stableAnchor) : Infinity;
+    const interactionAgeMs = Number.isFinite(lastInteractionAt)
+      ? Math.max(0, now - lastInteractionAt)
+      : Infinity;
+
+    const state = Runtime.classifyActivityState({
+      hidden: document.hidden,
+      scrollActive,
+      mutationRate: mutationRate(now),
+      recentBlockingMs: recentBlockingMs(now),
+      stableForMs,
+      interactionAgeMs
+    });
+
+    return { state, stableForMs, interactionAgeMs };
   }
 
   function currentTargets() {
     const root = document.documentElement;
-    const primary = document.querySelectorAll(
-      'article[data-testid^="conversation-turn-"]'
-    );
+    const primary = document.querySelectorAll('article[data-testid^="conversation-turn-"]');
 
     if (primary.length) {
       structureMode = "primary";
@@ -93,7 +295,6 @@
     }
 
     const fallback = document.querySelectorAll("[data-message-author-role]");
-
     if (fallback.length) {
       structureMode = "fallback";
       if (root) root.setAttribute("data-cgpt-perf-fallback", "on");
@@ -105,48 +306,97 @@
     return fallback;
   }
 
+  function clearColdState() {
+    for (const node of trackedTurns) {
+      if (node && node.removeAttribute) node.removeAttribute("data-cgpt-perf-cold");
+    }
+  }
+
   function applyOptimizationState() {
     const root = document.documentElement;
     if (!root) return;
-
-    if (optimizationEnabled) {
-      root.setAttribute("data-cgpt-perf-opt", "on");
-    } else {
+    if (optimizationEnabled) root.setAttribute("data-cgpt-perf-opt", "on");
+    else {
       root.removeAttribute("data-cgpt-perf-opt");
+      clearColdState();
+    }
+    latest.optimizationEnabled = optimizationEnabled;
+  }
+
+  function ensureTurnObserver() {
+    if (turnObserver || typeof IntersectionObserver !== "function") return turnObserver;
+
+    try {
+      turnObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          const node = entry.target;
+          const isNear = Boolean(entry.isIntersecting);
+          turnNearState.set(node, isNear);
+          if (isNear && node && node.removeAttribute) {
+            node.removeAttribute("data-cgpt-perf-cold");
+          }
+        }
+      }, {
+        root: null,
+        rootMargin: "1800px 0px 1800px 0px",
+        threshold: 0
+      });
+    } catch (_) {
+      turnObserver = null;
     }
 
-    latest.optimizationEnabled = optimizationEnabled;
+    return turnObserver;
+  }
+
+  function closestTurn(target) {
+    let node = target || null;
+    if (node && node.nodeType !== 1) node = node.parentElement || null;
+    if (!node || typeof node.closest !== "function") return null;
+
+    const primaryTurn = node.closest('article[data-testid^="conversation-turn-"]');
+    if (primaryTurn) return primaryTurn;
+    return node.closest("[data-message-author-role]");
   }
 
   function observeBlocking() {
     if (!PerformanceObserverApi) return;
-
-    const type = supportsLoAF
-      ? "long-animation-frame"
-      : supportsLongTask
-        ? "longtask"
-        : null;
-
+    const type = supportsLoAF ? "long-animation-frame" : supportsLongTask ? "longtask" : null;
     if (!type) return;
 
     try {
       const observer = new PerformanceObserverApi((list) => {
         const now = performance.now();
-
         for (const entry of list.getEntries()) {
-          const eventTime = entry.startTime + entry.duration;
-          blockingSamples.push({
-            time: eventTime,
-            duration: Number(entry.duration) || 0
-          });
+          const duration = Number(entry.duration) || 0;
+          const eventTime = (Number(entry.startTime) || 0) + duration;
+          blockingSamples.push({ time: eventTime, duration });
+          lastBlockingAt = Math.max(lastBlockingAt, eventTime);
+          if (duration >= 50) {
+            incidents.push({
+              time: Math.round(eventTime),
+              kind: type,
+              duration: Math.round(duration),
+              optimizationEnabled
+            });
+            if (blackBox) {
+              blackBox.record(type, {
+                duration,
+                blockingDuration: Number(entry.blockingDuration) || 0,
+                renderStart: Number(entry.renderStart) || 0,
+                styleAndLayoutStart: Number(entry.styleAndLayoutStart) || 0,
+                firstUIEventTimestamp: Number(entry.firstUIEventTimestamp) || 0,
+                scripts: entry.scripts || [],
+                activityState,
+                optimizationEnabled
+              }, blackBoxTimes(eventTime));
+            }
+          }
         }
-
         pruneArray(blockingSamples, now);
       });
-
       observer.observe({ type, buffered: true });
     } catch (_) {
-      // 不支持时保持 UNKNOWN，不把“没有数据”当成 0。
+      // Unsupported browsers stay UNKNOWN.
     }
   }
 
@@ -156,109 +406,196 @@
     try {
       const observer = new PerformanceObserverApi((list) => {
         const now = performance.now();
-
         for (const entry of list.getEntries()) {
           const interactionId = Number(entry.interactionId) || 0;
           if (!interactionId) continue;
-
           const duration = Number(entry.duration) || 0;
           if (duration <= 0) continue;
-
-          const eventTime = entry.startTime + entry.duration;
+          const eventTime = (Number(entry.startTime) || 0) + duration;
           const existing = interactionSamples.get(interactionId);
-
           if (!existing || duration > existing.duration) {
-            interactionSamples.set(interactionId, {
-              time: eventTime,
-              duration
-            });
+            interactionSamples.set(interactionId, { time: eventTime, duration });
+          }
+          if (blackBox && duration >= 40) {
+            blackBox.record("event-timing", {
+              interactionId,
+              duration,
+              eventName: String(entry.name || ""),
+              activityState
+            }, blackBoxTimes(eventTime));
+          }
+        }
+        pruneInteractions(now);
+      });
+      observer.observe({ type: "event", buffered: true, durationThreshold: 40 });
+    } catch (_) {
+      // Unsupported browsers stay UNKNOWN.
+    }
+  }
+
+  function observeMutations() {
+    if (typeof MutationObserver !== "function" || !document.documentElement) return;
+    try {
+      const observer = new MutationObserver((records) => {
+        const now = performance.now();
+        const count = Math.max(1, records.length);
+        mutationSamples.push({ time: now, count });
+        lastMutationAt = now;
+
+        const inspectCount = Math.min(records.length, 12);
+        for (let i = 0; i < inspectCount; i += 1) {
+          const turn = closestTurn(records[i].target);
+          if (turn) {
+            turnMutationAt.set(turn, now);
+            if (turn.removeAttribute) turn.removeAttribute("data-cgpt-perf-cold");
           }
         }
 
-        pruneInteractions(now);
+        pruneMutations(now);
       });
-
-      observer.observe({
-        type: "event",
-        buffered: true,
-        durationThreshold: 40
+      observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        characterData: true
       });
     } catch (_) {
-      // 不支持时保持 UNKNOWN。
+      // DOM activity becomes UNKNOWN rather than failing the monitor.
+    }
+  }
+
+  function markInteraction() {
+    lastInteractionAt = performance.now();
+  }
+
+  function markSendMarker(source) {
+    if (!blackBox) return;
+    const now = performance.now();
+    if (now - lastSendMarkerAt < SEND_MARKER_DEDUPE_MS) return;
+    lastSendMarkerAt = now;
+    blackBox.markSend(source, blackBoxTimes(now));
+  }
+
+  function markScroll() {
+    const now = performance.now();
+    lastScrollAt = now;
+    if (!blackBox || now - lastBlackBoxScrollAt < BLACKBOX_SCROLL_SAMPLE_MS) return;
+    lastBlackBoxScrollAt = now;
+    const view = globalThis.window || globalThis;
+    blackBox.record("scroll", {
+      scrollX: Number(view.scrollX) || 0,
+      scrollY: Number(view.scrollY) || 0,
+      activityState
+    }, blackBoxTimes(now));
+  }
+
+  function installActivityListeners() {
+    const passive = { passive: true, capture: true };
+    for (const type of ["pointerdown", "keydown", "input", "submit", "click"]) {
+      document.addEventListener(type, markInteraction, passive);
+    }
+    document.addEventListener("keydown", (event) => {
+      if (!event || event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+      markSendMarker("enter");
+    }, passive);
+    document.addEventListener("submit", () => {
+      markSendMarker("submit");
+    }, passive);
+    for (const type of ["wheel", "touchmove", "scroll"]) {
+      document.addEventListener(type, markScroll, passive);
     }
   }
 
   function sampleDrift() {
     const now = performance.now();
     const drift = Math.max(0, now - lastTimerExpected);
-
     lastTimerExpected = now + DRIFT_INTERVAL_MS;
-    driftSamples.push({
-      time: now,
-      drift
-    });
-
+    if (document.hidden) return;
+    driftSamples.push({ time: now, drift });
     pruneArray(driftSamples, now);
   }
 
   function runFrameBurst() {
     if (document.hidden) return;
+    const snapshot = activitySnapshot(performance.now());
+    if (!Runtime.shouldRunActiveProbe(snapshot.state, passiveSignalsAvailable)) return;
 
     const started = performance.now();
     let previous = started;
-
     function step(now) {
       const delta = now - previous;
       previous = now;
-
-      if (delta > 0 && delta < 1000) {
-        frameSamples.push({
-          time: now,
-          jank: delta > 33.4 ? 1 : 0
-        });
-      }
-
-      if (now - started < FRAME_BURST_MS) {
-        requestAnimationFrame(step);
-      }
+      if (delta > 0 && delta < 1000) frameSamples.push({ time: now, jank: delta > 33.4 ? 1 : 0 });
+      if (now - started < FRAME_BURST_MS) requestAnimationFrame(step);
     }
-
     requestAnimationFrame(step);
   }
 
-  function estimateCoverage(now) {
-    if (now - lastCoverageAt < COVERAGE_EVERY_MS) {
+  function maybeRunActiveProbe() {
+    const snapshot = activitySnapshot(performance.now());
+    activeProbeSuppressed = !Runtime.shouldRunActiveProbe(snapshot.state, passiveSignalsAvailable);
+    if (!activeProbeSuppressed) runFrameBurst();
+  }
+
+  function maintainColdTurns(now, snapshot) {
+    if (!Runtime.shouldRunLayoutWork(snapshot.state, snapshot.stableForMs)) return coverageEstimate;
+    if (now - lastColdMaintenanceAt < COLD_MAINTENANCE_EVERY_MS) return coverageEstimate;
+
+    const observer = ensureTurnObserver();
+    if (!observer) {
+      coverageEstimate = null;
       return coverageEstimate;
     }
 
-    lastCoverageAt = now;
-
-    const nodes = currentTargets();
+    lastColdMaintenanceAt = now;
+    const nodes = Array.from(currentTargets());
     loadedBlocks = nodes.length;
 
-    if (!loadedBlocks) {
-      coverageEstimate = 0;
-      return coverageEstimate;
-    }
-
-    const viewportHeight =
-      window.innerHeight || document.documentElement.clientHeight || 0;
-
-    const sampleCount = Math.min(loadedBlocks, MAX_COVERAGE_SAMPLES);
-    const step = loadedBlocks / sampleCount;
-    let offscreen = 0;
-
-    for (let i = 0; i < sampleCount; i += 1) {
-      const index = Math.min(loadedBlocks - 1, Math.floor(i * step));
-      const rect = nodes[index].getBoundingClientRect();
-
-      if (rect.bottom < -200 || rect.top > viewportHeight + 200) {
-        offscreen += 1;
+    for (const tracked of Array.from(trackedTurns)) {
+      if (!tracked || tracked.isConnected === false) {
+        trackedTurns.delete(tracked);
+        try { observer.unobserve(tracked); } catch (_) {}
       }
     }
 
-    coverageEstimate = Math.round((offscreen / sampleCount) * 100);
+    for (const node of nodes) {
+      if (!trackedTurns.has(node)) {
+        trackedTurns.add(node);
+        turnMutationAt.set(node, now);
+        try { observer.observe(node); } catch (_) {}
+      }
+    }
+
+    const lastProtected = new Set(nodes.slice(-2));
+    let coldCount = 0;
+
+    for (const node of nodes) {
+      const nearState = turnNearState.get(node);
+      const mutatedAt = turnMutationAt.get(node);
+      const recentlyMutated = Number.isFinite(mutatedAt) && now - mutatedAt < COLD_STABLE_MS;
+      const canCool =
+        optimizationEnabled &&
+        nearState === false &&
+        !lastProtected.has(node) &&
+        !recentlyMutated;
+
+      if (canCool) {
+        if (node.getAttribute("data-cgpt-perf-cold") !== "on") {
+          node.setAttribute("data-cgpt-perf-cold", "on");
+        }
+        coldCount += 1;
+      } else if (node.hasAttribute("data-cgpt-perf-cold")) {
+        node.removeAttribute("data-cgpt-perf-cold");
+      }
+    }
+
+    coverageEstimate = loadedBlocks
+      ? Math.round((coldCount / loadedBlocks) * 100)
+      : 0;
     return coverageEstimate;
+  }
+
+  function estimateCoverage(now, snapshot) {
+    return maintainColdTurns(now, snapshot);
   }
 
   function collectSignals(now) {
@@ -269,42 +606,26 @@
 
     let blockingRatio = null;
     let blockingSource = "unknown";
-
     if (supportsLoAF || supportsLongTask) {
-      const blockingMs = blockingSamples.reduce(
-        (sum, item) => sum + item.duration,
-        0
-      );
+      const blockingMs = blockingSamples.reduce((sum, item) => sum + item.duration, 0);
       blockingRatio = Core.clamp(blockingMs / WINDOW_MS, 0, 1);
       blockingSource = supportsLoAF ? "loaf" : "longtask";
     }
 
     let jankRatio = null;
     if (frameSamples.length) {
-      const jankCount = frameSamples.reduce(
-        (sum, item) => sum + item.jank,
-        0
-      );
+      const jankCount = frameSamples.reduce((sum, item) => sum + item.jank, 0);
       jankRatio = jankCount / frameSamples.length;
     }
 
-    let driftMs = null;
-    if (driftSamples.length) {
-      driftMs = Core.average(
-        driftSamples.map((item) => item.drift)
-      );
-    }
+    const driftMs = driftSamples.length
+      ? Core.average(driftSamples.map((item) => item.drift))
+      : null;
 
-    let eventLatencyMs = null;
-    const interactionDurations = Array.from(
-      interactionSamples.values(),
-      (item) => item.duration
-    );
-
-    if (interactionDurations.length) {
-      // 这是“交互响应样本”，不是官方 INP。
-      eventLatencyMs = Core.percentile(interactionDurations, 0.98);
-    }
+    const interactionDurations = Array.from(interactionSamples.values(), (item) => item.duration);
+    const eventLatencyMs = interactionDurations.length
+      ? Core.percentile(interactionDurations, 0.98)
+      : null;
 
     return {
       blockingRatio,
@@ -317,28 +638,28 @@
   }
 
   function updateMetrics() {
-    const now = performance.now();
+    const workStarted = performance.now();
+    const now = workStarted;
     totalUpdateTicks += 1;
+    const snapshot = activitySnapshot(now);
+    activityState = snapshot.state;
+    activeProbeSuppressed = !Runtime.shouldRunActiveProbe(activityState, passiveSignalsAvailable);
 
     if (document.hidden) {
-      latest.status = "background";
-      latest.sampledAt = now;
-      latest.foregroundRatio = totalUpdateTicks
-        ? foregroundUpdateTicks / totalUpdateTicks
-        : 0;
+      latest = {
+        ...latest,
+        status: "background",
+        sampledAt: now,
+        activityState,
+        activeProbeSuppressed: true,
+        foregroundRatio: totalUpdateTicks ? foregroundUpdateTicks / totalUpdateTicks : 0
+      };
       return;
     }
 
     foregroundUpdateTicks += 1;
-
-    const coverage = optimizationEnabled
-      ? estimateCoverage(now)
-      : 0;
-
-    if (!optimizationEnabled && now - lastCoverageAt >= COVERAGE_EVERY_MS) {
-      estimateCoverage(now);
-    }
-
+    selfWorkMs = 0;
+    const coverage = estimateCoverage(now, snapshot);
     const signals = collectSignals(now);
 
     const pagePressure = Core.calculatePagePressure({
@@ -349,10 +670,7 @@
     });
 
     if (pagePressure != null) {
-      historySamples.push({
-        time: now,
-        pressure: pagePressure
-      });
+      historySamples.push({ time: now, pressure: pagePressure });
       pruneArray(historySamples, now, Core.CONFIG.HISTORY_MS);
     }
 
@@ -363,11 +681,7 @@
       loadedBlocks
     });
 
-    const historyAgeMs = Math.max(
-      windowState.historyAgeMs,
-      now - firstSampleAt
-    );
-
+    const historyAgeMs = Math.max(windowState.historyAgeMs, now - firstSampleAt);
     recommendationState = Core.nextRecommendationState({
       previousState: recommendationState,
       windowPressure: windowState.windowPressure,
@@ -377,15 +691,37 @@
       historyAgeMs
     });
 
-    const foregroundRatio = totalUpdateTicks
-      ? foregroundUpdateTicks / totalUpdateTicks
-      : 0;
-
+    const foregroundRatio = totalUpdateTicks ? foregroundUpdateTicks / totalUpdateTicks : 0;
     const supportedSignals =
       Number(supportsLoAF || supportsLongTask) +
-      1 + // requestAnimationFrame sampling
-      1 + // timer drift
+      Number(!passiveSignalsAvailable) +
+      1 +
       Number(supportsEventTiming);
+    const currentMutationRate = mutationRate(now);
+
+    selfWorkMs = Math.max(selfWorkMs, performance.now() - workStarted);
+    incidents.push({
+      time: Math.round(now),
+      kind: "sample",
+      activityState,
+      pagePressure,
+      mutationRate: currentMutationRate,
+      selfWorkMs: Math.round(selfWorkMs * 10) / 10,
+      optimizationEnabled
+    });
+
+    if (blackBox) {
+      blackBox.record("sample", {
+        activityState,
+        pagePressure,
+        mutationRate: currentMutationRate,
+        selfWorkMs: Math.round(selfWorkMs * 10) / 10,
+        optimizationEnabled,
+        loadedBlocks,
+        coverage
+      }, blackBoxTimes(now));
+      selfWorkMs = Math.max(selfWorkMs, performance.now() - workStarted);
+    }
 
     latest = {
       pagePressure,
@@ -393,27 +729,12 @@
       recommendationState,
       coverage,
       optimizationEnabled,
-      status:
-        historyAgeMs < Core.CONFIG.MIN_GUIDANCE_MS
-          ? "sampling"
-          : "running",
-      blockingRatio:
-        signals.blockingRatio == null
-          ? null
-          : Math.round(signals.blockingRatio * 1000) / 10,
+      status: historyAgeMs < Core.CONFIG.MIN_GUIDANCE_MS ? "sampling" : "running",
+      blockingRatio: signals.blockingRatio == null ? null : Math.round(signals.blockingRatio * 1000) / 10,
       blockingSource: signals.blockingSource,
-      jankRatio:
-        signals.jankRatio == null
-          ? null
-          : Math.round(signals.jankRatio * 1000) / 10,
-      driftMs:
-        signals.driftMs == null
-          ? null
-          : Math.round(signals.driftMs * 10) / 10,
-      eventLatencyMs:
-        signals.eventLatencyMs == null
-          ? null
-          : Math.round(signals.eventLatencyMs),
+      jankRatio: signals.jankRatio == null ? null : Math.round(signals.jankRatio * 1000) / 10,
+      driftMs: signals.driftMs == null ? null : Math.round(signals.driftMs * 10) / 10,
+      eventLatencyMs: signals.eventLatencyMs == null ? null : Math.round(signals.eventLatencyMs),
       interactionCount: signals.interactionCount,
       loadedBlocks,
       structureMode,
@@ -422,8 +743,14 @@
       supportedSignals,
       expectedSignals: 4,
       foregroundRatio,
-      sampledAt: now
+      sampledAt: now,
+      activityState,
+      activeProbeSuppressed,
+      selfWorkMs: Math.round(selfWorkMs * 10) / 10,
+      recentIncidents: incidents.values().slice(-12)
     };
+
+    maybeCheckpointBlackBox(now);
   }
 
   function currentConversationId() {
@@ -433,14 +760,11 @@
 
   function calibrationForCurrentWindow() {
     if (!historyCalibration) return null;
-
     const currentId = currentConversationId();
     return {
       ...historyCalibration,
       matchesCurrentConversation:
-        Boolean(currentId) &&
-        Boolean(historyCalibration.conversationId) &&
-        currentId === historyCalibration.conversationId
+        Boolean(currentId) && Boolean(historyCalibration.conversationId) && currentId === historyCalibration.conversationId
     };
   }
 
@@ -459,14 +783,51 @@
       return true;
     }
 
+    if (message.type === "getBlackBoxStatus") {
+      if (!blackBox) {
+        sendResponse({ ok: false, error: "BLACK_BOX_UNAVAILABLE" });
+        return true;
+      }
+      sendResponse({ ok: true, status: blackBoxStatus() });
+      return true;
+    }
+
+    if (message.type === "markBlackBoxIncident") {
+      if (!blackBox) {
+        sendResponse({ ok: false, error: "BLACK_BOX_UNAVAILABLE" });
+        return true;
+      }
+      const now = performance.now();
+      blackBox.markManual(blackBoxTimes(now));
+      sendResponse({ ok: true, status: blackBoxStatus() });
+      return true;
+    }
+
+    if (message.type === "exportBlackBox") {
+      if (!blackBox) {
+        sendResponse({ ok: false, error: "BLACK_BOX_UNAVAILABLE" });
+        return true;
+      }
+      const kind = ["send", "manual", "recent"].includes(message.kind)
+        ? message.kind
+        : "recent";
+      sendResponse({
+        ok: true,
+        payload: blackBox.buildExport(kind, {
+          nowPerf: performance.now(),
+          exportedAt: new Date().toISOString(),
+          pageTimeOrigin: pageTimeOriginIso(),
+          conversationId: currentConversationId(),
+          optimizationEnabled
+        })
+      });
+      return true;
+    }
+
     if (message.type === "setHistoryCalibration") {
       const summary = message.summary;
-
       if (!summary || summary.valid !== true) {
-        sendResponse({
-          ok: false,
-          error: "历史快照无效"
-        });
+        sendResponse({ ok: false, error: "历史快照无效" });
         return true;
       }
 
@@ -489,69 +850,48 @@
         depthLevel: summary.depthLevel || "low"
       };
 
-      sendResponse({
-        ok: true,
-        calibration: calibrationForCurrentWindow()
-      });
+      sendResponse({ ok: true, calibration: calibrationForCurrentWindow() });
       return true;
     }
 
     if (message.type === "toggleOptimization") {
       optimizationEnabled = Boolean(message.enabled);
       applyOptimizationState();
-
-      latest = {
-        ...latest,
-        optimizationEnabled
-      };
-
-      sendResponse({
-        ok: true,
-        metrics: latest
-      });
+      latest = { ...latest, optimizationEnabled };
+      sendResponse({ ok: true, metrics: latest });
       return true;
     }
   });
 
   observeBlocking();
   observeInteractions();
+  observeMutations();
+  installActivityListeners();
   applyOptimizationState();
+  restoreBlackBoxCheckpoint();
 
-  setInterval(() => {
-    if (!document.hidden) {
-      sampleDrift();
-    }
-  }, DRIFT_INTERVAL_MS);
-
-  setInterval(runFrameBurst, FRAME_BURST_EVERY_MS);
+  setInterval(sampleDrift, DRIFT_INTERVAL_MS);
+  setInterval(maybeRunActiveProbe, ACTIVE_PROBE_EVERY_MS);
   setInterval(updateMetrics, UPDATE_MS);
 
-  document.addEventListener(
-    "visibilitychange",
-    () => {
-      lastTimerExpected = performance.now() + DRIFT_INTERVAL_MS;
-
-      if (!document.hidden) {
-        applyOptimizationState();
-        runFrameBurst();
-      }
-    },
-    { passive: true }
-  );
+  document.addEventListener("visibilitychange", () => {
+    lastTimerExpected = performance.now() + DRIFT_INTERVAL_MS;
+    if (!document.hidden) {
+      lastInteractionAt = performance.now();
+      applyOptimizationState();
+      updateMetrics();
+    }
+  }, { passive: true });
 
   if (document.readyState === "loading") {
-    document.addEventListener(
-      "DOMContentLoaded",
-      () => {
-        applyOptimizationState();
-        runFrameBurst();
-        updateMetrics();
-      },
-      { once: true }
-    );
+    document.addEventListener("DOMContentLoaded", () => {
+      lastInteractionAt = performance.now();
+      applyOptimizationState();
+      updateMetrics();
+    }, { once: true, passive: true });
   } else {
+    lastInteractionAt = performance.now();
     applyOptimizationState();
-    runFrameBurst();
     updateMetrics();
   }
 })();

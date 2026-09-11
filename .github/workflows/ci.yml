@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - perf/v1.7.0-self-yielding
+      - perf/v1.7.1-diagnostic-blackbox
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run tests
+        run: npm test
+      - name: Syntax check
+        run: npm run check
+      - name: Package extension candidate
+        run: |
+          cd extension
+          zip -r ../chatgpt-page-perf-guard-v1.7.1-candidate.zip . -x '*.DS_Store'
+      - name: Upload extension candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatgpt-page-perf-guard-v1.7.1-candidate
+          path: chatgpt-page-perf-guard-v1.7.1-candidate.zip
+          if-no-files-found: error
+          retention-days: 7

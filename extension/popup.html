@@ -39,9 +39,7 @@
       </div>
 
       <div id="recommendation" class="recommendation">正在采样…</div>
-      <div id="recommendationNote" class="recommendation-note">
-        先继续使用，采样一会儿会更准。
-      </div>
+      <div id="recommendationNote" class="recommendation-note">先继续使用，采样一会儿会更准。</div>
 
       <div class="reason-box">
         <div class="reason-title">主要原因（页面侧）</div>
@@ -53,20 +51,14 @@
       <div class="history-head">
         <div>
           <div class="context-label">历史深度 <small>工程估算</small></div>
-          <div id="historyNote" class="context-note">
-            UNKNOWN · 默认不读取完整聊天历史
-          </div>
+          <div id="historyNote" class="context-note">UNKNOWN · 默认不读取完整聊天历史</div>
         </div>
         <strong id="historyDepth">UNKNOWN</strong>
       </div>
 
       <div id="historyStats" class="history-stats hidden"></div>
-
-      <button id="importHistoryButton" class="import-button" type="button">
-        导入会话分析 JSON
-      </button>
+      <button id="importHistoryButton" class="import-button" type="button">导入会话分析 JSON</button>
       <input id="historyFile" type="file" accept=".json,application/json" hidden>
-
       <div class="import-note">
         支持 OpenAI 官方 conversations.json / 编号会话 JSON，以及 Context Bridge JSON。仅在本机提取结构元数据；不上传文件。刷新页面后自动清除。
       </div>
@@ -84,7 +76,7 @@
     <section class="card control">
       <div>
         <div class="control-title">长聊天优化</div>
-        <div class="control-note">减少屏外历史消息的渲染压力</div>
+        <div class="control-note">只冷却已确认远屏且稳定的历史消息</div>
       </div>
       <label class="switch" title="只控制当前 ChatGPT 标签页">
         <input id="optimizationToggle" type="checkbox" checked>
@@ -92,48 +84,55 @@
       </label>
     </section>
 
+    <section class="card history-card">
+      <div class="history-head">
+        <div>
+          <div class="context-label">诊断黑匣子</div>
+          <div class="context-note">仅记录本机性能元数据，不记录聊天正文</div>
+        </div>
+      </div>
+      <div id="blackBoxStatus" class="context-note">正在读取诊断状态…</div>
+      <div class="detail-row"><span>缓冲事件</span><strong id="blackBoxEventCount">--</strong></div>
+      <div class="detail-row"><span>会话保护</span><strong id="blackBoxCheckpointState">UNKNOWN</strong></div>
+      <div class="detail-row"><span>最近发送标记</span><strong id="blackBoxLastSend">UNKNOWN</strong></div>
+      <div class="detail-row"><span>严重事件簇</span><strong id="blackBoxCluster">UNKNOWN</strong></div>
+      <button id="exportSendIncidentButton" class="import-button" type="button" disabled>导出最近发送现场</button>
+      <button id="exportRecentBlackBoxButton" class="import-button" type="button" disabled>导出最近10分钟</button>
+      <button id="markIncidentButton" class="import-button" type="button" disabled>标记刚才卡顿</button>
+      <div class="import-note">导出 JSON 只在点击时本地生成；不会自动上传，也不需要下载权限。</div>
+      <div id="blackBoxActionStatus" class="import-status hidden"></div>
+    </section>
+
+    <section class="card history-card">
+      <div class="history-head">
+        <div>
+          <div class="context-label">换窗交接</div>
+          <div class="context-note">结构化提炼当前会话，避免旧版本/未验证状态混入新窗口</div>
+        </div>
+      </div>
+      <button id="prepareHandoffButton" class="import-button" type="button">准备换窗交接</button>
+      <div class="import-note">
+        只把高保真交接指令填入当前 ChatGPT 输入框；不会自动抓取完整聊天正文，不会自动发送，也不会自动新建聊天。
+      </div>
+      <div id="handoffStatus" class="import-status hidden"></div>
+    </section>
+
     <details class="card details">
       <summary>详细指标</summary>
-      <div class="detail-row">
-        <span>近 90 秒页面压力 <small>本机估算</small></span>
-        <strong id="windowPressure">--%</strong>
-      </div>
-      <div class="detail-row">
-        <span>屏外渲染覆盖</span>
-        <strong id="coverage">--%</strong>
-      </div>
-      <div class="detail-row">
-        <span>页面阻塞</span>
-        <strong id="blocking">UNKNOWN</strong>
-      </div>
-      <div class="detail-row">
-        <span>掉帧情况</span>
-        <strong id="jank">UNKNOWN</strong>
-      </div>
-      <div class="detail-row">
-        <span>交互响应 <small>样本</small></span>
-        <strong id="eventLatency">UNKNOWN</strong>
-      </div>
-      <div class="detail-row">
-        <span>响应延迟</span>
-        <strong id="drift">UNKNOWN</strong>
-      </div>
-      <div class="detail-row">
-        <span>当前已加载对话块</span>
-        <strong id="loadedBlocks">--</strong>
-      </div>
-      <div class="detail-row">
-        <span>页面识别</span>
-        <strong id="structure">--</strong>
-      </div>
-      <div class="detail-row">
-        <span>检测能力</span>
-        <strong id="signalCoverage">--</strong>
-      </div>
-      <div class="detail-row">
-        <span>有效交互样本</span>
-        <strong id="interactionCount">--</strong>
-      </div>
+      <div class="detail-row"><span>运行状态</span><strong id="activityState">UNKNOWN</strong></div>
+      <div class="detail-row"><span>主动探针</span><strong id="probeState">UNKNOWN</strong></div>
+      <div class="detail-row"><span>扩展本轮主动工作</span><strong id="selfWork">UNKNOWN</strong></div>
+      <div class="detail-row"><span>最近长帧/阻塞事件</span><strong id="recentIncident">UNKNOWN</strong></div>
+      <div class="detail-row"><span>近 90 秒页面压力 <small>本机估算</small></span><strong id="windowPressure">--%</strong></div>
+      <div class="detail-row"><span>远屏冷却覆盖</span><strong id="coverage">UNKNOWN</strong></div>
+      <div class="detail-row"><span>页面阻塞</span><strong id="blocking">UNKNOWN</strong></div>
+      <div class="detail-row"><span>掉帧情况</span><strong id="jank">UNKNOWN</strong></div>
+      <div class="detail-row"><span>交互响应 <small>样本</small></span><strong id="eventLatency">UNKNOWN</strong></div>
+      <div class="detail-row"><span>响应延迟</span><strong id="drift">UNKNOWN</strong></div>
+      <div class="detail-row"><span>当前已加载对话块</span><strong id="loadedBlocks">--</strong></div>
+      <div class="detail-row"><span>页面识别</span><strong id="structure">--</strong></div>
+      <div class="detail-row"><span>检测能力</span><strong id="signalCoverage">--</strong></div>
+      <div class="detail-row"><span>有效交互样本</span><strong id="interactionCount">--</strong></div>
     </details>
 
     <div class="privacy-note">
@@ -142,12 +141,10 @@
 
     <footer>
       <span>可测量 / 本机估算 / UNKNOWN 严格区分</span>
-      <span>v1.6.1</span>
+      <span>v1.7.1</span>
     </footer>
 
-    <div id="notice" class="notice hidden">
-      请先打开或刷新 chatgpt.com，再点击扩展图标。
-    </div>
+    <div id="notice" class="notice hidden">请先打开或刷新 chatgpt.com，再点击扩展图标。</div>
   </main>
 
   <script src="core.js"></script>

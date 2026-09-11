@@ -1,8 +1,14 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT 页面性能助手",
-  "version": "1.6.1",
-  "description": "本机检测 ChatGPT 页面压力与换窗建议；可选导入窗口分析 JSON 做历史深度校准。模型上下文不可验证时始终显示 UNKNOWN。零联网、零遥测、零存储。",
+  "version": "1.7.1",
+  "description": "本机检测 ChatGPT 页面压力；繁忙时主动让路，只冷却稳定远屏历史消息，并提供会话级诊断黑匣子与安全换窗交接。模型上下文不可验证时始终显示 UNKNOWN。零联网、零遥测。",
+  "permissions": [
+    "storage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_title": "ChatGPT 页面性能助手",
     "default_popup": "popup.html"
@@ -17,7 +23,10 @@
       ],
       "js": [
         "core.js",
-        "monitor.js"
+        "runtime.js",
+        "blackbox.js",
+        "monitor.js",
+        "handoff.js"
       ],
       "run_at": "document_start"
     }
