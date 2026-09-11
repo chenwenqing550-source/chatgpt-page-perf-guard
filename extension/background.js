@@ -51,12 +51,26 @@
     return Number.isFinite(number) ? number : null;
   }
 
+  function sanitizeSourceUrl(value) {
+    const raw = boundedString(value, 2048);
+    if (!raw) return "";
+    try {
+      const parsed = new URL(raw);
+      parsed.search = "";
+      parsed.hash = "";
+      return boundedString(parsed.toString());
+    } catch (_) {
+      return boundedString(raw.split(/[?#]/, 1)[0]);
+    }
+  }
+
   function sanitizeScript(value) {
     if (!value || typeof value !== "object") return null;
     const result = {};
     for (const key of ALLOWED_SCRIPT_KEYS) {
       if (!(key in value)) continue;
-      if (typeof value[key] === "string") result[key] = boundedString(value[key]);
+      if (key === "sourceURL") result[key] = sanitizeSourceUrl(value[key]);
+      else if (typeof value[key] === "string") result[key] = boundedString(value[key]);
       else {
         const number = finiteNumber(value[key]);
         if (number != null) result[key] = number;
@@ -88,12 +102,13 @@
   function sanitizeSnapshot(snapshot) {
     const value = snapshot && typeof snapshot === "object" ? snapshot : {};
     const conversationId = boundedString(value.conversationId, 64);
+    const storedSavedAt = finiteNumber(value.savedAt);
     const events = Array.isArray(value.events)
       ? value.events.slice(-MAX_CHECKPOINT_EVENTS).map(sanitizeEvent).filter(Boolean)
       : [];
     return {
       schemaVersion: "1.0",
-      savedAt: Date.now(),
+      savedAt: storedSavedAt == null ? Date.now() : storedSavedAt,
       conversationId,
       events
     };
