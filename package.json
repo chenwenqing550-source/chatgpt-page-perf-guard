@@ -1,0 +1,14 @@
+{
+  "name": "chatgpt-page-perf-guard",
+  "version": "1.6.1",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "check": "node --check core.js && node --check monitor.js && node --check popup.js"
+  },
+  "description": "Local-only ChatGPT page performance monitor and long-chat rendering guard.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  }
+}

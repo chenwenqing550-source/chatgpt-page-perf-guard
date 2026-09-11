@@ -1,0 +1,14 @@
+/*
+ChatGPT 页面性能助手 v1.6.1
+仅做屏外历史消息渲染优化，不隐藏、不删除消息。
+*/
+
+html[data-cgpt-perf-opt="on"] article[data-testid^="conversation-turn-"] {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 720px;
+}
+
+html[data-cgpt-perf-opt="on"][data-cgpt-perf-fallback="on"] [data-message-author-role] {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 640px;
+}

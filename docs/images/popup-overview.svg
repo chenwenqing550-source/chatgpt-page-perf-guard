@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="620" viewBox="0 0 760 620" role="img" aria-labelledby="t d">
+  <title id="t">ChatGPT 页面性能助手概览</title>
+  <desc id="d">根据真实扩展界面提取并重排的概览示意图</desc>
+  <rect width="760" height="620" rx="28" fill="#111318"/>
+  <text x="42" y="58" fill="#f4f6f8" font-size="28" font-family="system-ui,Segoe UI,Microsoft YaHei,sans-serif" font-weight="700">ChatGPT 页面状态</text>
+  <text x="42" y="88" fill="#8f98a7" font-size="16" font-family="system-ui,Segoe UI,Microsoft YaHei,sans-serif">本机检测 · 数据不上传</text>
+  <rect x="584" y="38" width="130" height="42" rx="21" fill="#143a2b"/>
+  <text x="649" y="65" text-anchor="middle" fill="#7de0af" font-size="16" font-family="system-ui,Segoe UI,Microsoft YaHei,sans-serif">运行正常</text>
+  <rect x="32" y="118" width="696" height="254" rx="22" fill="#1a1d23" stroke="#2a2f38"/>
+  <text x="58" y="158" fill="#c8ced8" font-size="20" font-family="system-ui,Segoe UI,Microsoft YaHei,sans-serif">页面压力 · 本机估算</text>
+  <text x="674" y="166" text-anchor="end" fill="#ffffff" font-size="44" font-family="system-ui,Segoe UI,Microsoft YaHei,sans-serif" font-weight="700">4%</text>
+  <rect x="58" y="186" width="616" height="12" rx="6" fill="#2b3039"/>
+  <rect x="58" y="186" width="25" height="12" rx="6" fill="#6aa7ff"/>
+  <text x="58" y="234" fill="#9da6b4" font-size="17" font-family="system-ui,Segoe UI,Microsoft YaHei,sans-serif">页面侧建议</text>
+  <text x="674" y="234" text-anchor="end" fill="#e2e7ee" font-size="17" font-family="system-ui,Segoe UI,Microsoft YaHei,sans-serif" font-weight="700">无需换窗</text>
+  <line x1="58" y1="254" x2="674" y2="254" stroke="#2a2f38"/>
+  <text x="58" y="286" fill="#9da6b4" font-size="17" font-family="system-ui,Segoe UI,Microsoft YaHei,sans-serif">综合换窗建议</text>
+  <text x="674" y="286" text-anchor="end" fill="#ffffff" font-size="17" font-family="system-ui,Segoe UI,Microsoft YaHei,sans-serif" font-weight="700">当前综合无需换窗</text>
+  <text x="58" y="330" fill="#7de0af" font-size="20" font-family="system-ui,Segoe UI,Microsoft YaHei,sans-serif" font-weight="700">页面侧无需换窗</text>
+  <text x="58" y="354" fill="#8f98a7" font-size="14" font-family="system-ui,Segoe UI,Microsoft YaHei,sans-serif">只代表当前浏览器页面运行正常，不代表模型上下文还很空。</text>
+  <rect x="32" y="392" width="696" height="174" rx="22" fill="#1a1d23" stroke="#2a2f38"/>
+  <text x="58" y="432" fill="#f4f6f8" font-size="20" font-family="system-ui,Segoe UI,Microsoft YaHei,sans-serif" font-weight="700">历史深度</text>
+  <text x="674" y="432" text-anchor="end" fill="#ffd58f" font-size="18" font-family="system-ui,Segoe UI,Microsoft YaHei,sans-serif" font-weight="700">UNKNOWN</text>
+  <text x="58" y="462" fill="#8f98a7" font-size="14" font-family="system-ui,Segoe UI,Microsoft YaHei,sans-serif">默认不读取完整聊天历史；可选导入本地 JSON 做结构校准</text>
+  <rect x="58" y="488" width="616" height="48" rx="12" fill="#242a33" stroke="#343b46"/>
+  <text x="366" y="519" text-anchor="middle" fill="#e8ebef" font-size="16" font-family="system-ui,Segoe UI,Microsoft YaHei,sans-serif">导入会话分析 JSON</text>
+  <text x="32" y="600" fill="#68717f" font-size="13" font-family="system-ui,Segoe UI,Microsoft YaHei,sans-serif">v1.6.1 · 界面示意图根据真实扩展截图提取并重排</text>
+</svg>

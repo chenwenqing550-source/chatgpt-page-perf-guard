@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ChatGPT 页面状态</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="panel">
+    <header class="header">
+      <div>
+        <div class="title">ChatGPT 页面状态</div>
+        <div class="subtitle">本机检测 · 数据不上传</div>
+      </div>
+      <span id="statusPill" class="pill">连接中</span>
+    </header>
+
+    <section class="card hero">
+      <div class="primary-row">
+        <span>页面压力 <small>本机估算</small></span>
+        <strong id="pagePressure">--%</strong>
+      </div>
+      <div class="bar"><span id="pressureBar"></span></div>
+
+      <div class="decision-row">
+        <span>页面侧建议</span>
+        <strong id="pageAdvice">采样中</strong>
+      </div>
+
+      <div class="decision-row emphasized">
+        <span>综合换窗建议</span>
+        <strong id="combinedAdvice">历史未知</strong>
+      </div>
+
+      <div class="trust-row">
+        <span>判断可信度 <small>页面侧</small></span>
+        <strong id="confidence">--</strong>
+      </div>
+
+      <div id="recommendation" class="recommendation">正在采样…</div>
+      <div id="recommendationNote" class="recommendation-note">
+        先继续使用，采样一会儿会更准。
+      </div>
+
+      <div class="reason-box">
+        <div class="reason-title">主要原因（页面侧）</div>
+        <ul id="reasons"></ul>
+      </div>
+    </section>
+
+    <section class="card history-card">
+      <div class="history-head">
+        <div>
+          <div class="context-label">历史深度 <small>工程估算</small></div>
+          <div id="historyNote" class="context-note">
+            UNKNOWN · 默认不读取完整聊天历史
+          </div>
+        </div>
+        <strong id="historyDepth">UNKNOWN</strong>
+      </div>
+
+      <div id="historyStats" class="history-stats hidden"></div>
+
+      <button id="importHistoryButton" class="import-button" type="button">
+        导入会话分析 JSON
+      </button>
+      <input id="historyFile" type="file" accept=".json,application/json" hidden>
+
+      <div class="import-note">
+        支持 OpenAI 官方 conversations.json / 编号会话 JSON，以及 Context Bridge JSON。仅在本机提取结构元数据；不上传文件。刷新页面后自动清除。
+      </div>
+      <div id="importStatus" class="import-status hidden"></div>
+    </section>
+
+    <section class="card context-card">
+      <div>
+        <div class="context-label">模型上下文占用</div>
+        <div class="context-note">ChatGPT 未提供可验证的实时占用数据</div>
+      </div>
+      <strong>UNKNOWN</strong>
+    </section>
+
+    <section class="card control">
+      <div>
+        <div class="control-title">长聊天优化</div>
+        <div class="control-note">减少屏外历史消息的渲染压力</div>
+      </div>
+      <label class="switch" title="只控制当前 ChatGPT 标签页">
+        <input id="optimizationToggle" type="checkbox" checked>
+        <span class="slider"></span>
+      </label>
+    </section>
+
+    <details class="card details">
+      <summary>详细指标</summary>
+      <div class="detail-row">
+        <span>近 90 秒页面压力 <small>本机估算</small></span>
+        <strong id="windowPressure">--%</strong>
+      </div>
+      <div class="detail-row">
+        <span>屏外渲染覆盖</span>
+        <strong id="coverage">--%</strong>
+      </div>
+      <div class="detail-row">
+        <span>页面阻塞</span>
+        <strong id="blocking">UNKNOWN</strong>
+      </div>
+      <div class="detail-row">
+        <span>掉帧情况</span>
+        <strong id="jank">UNKNOWN</strong>
+      </div>
+      <div class="detail-row">
+        <span>交互响应 <small>样本</small></span>
+        <strong id="eventLatency">UNKNOWN</strong>
+      </div>
+      <div class="detail-row">
+        <span>响应延迟</span>
+        <strong id="drift">UNKNOWN</strong>
+      </div>
+      <div class="detail-row">
+        <span>当前已加载对话块</span>
+        <strong id="loadedBlocks">--</strong>
+      </div>
+      <div class="detail-row">
+        <span>页面识别</span>
+        <strong id="structure">--</strong>
+      </div>
+      <div class="detail-row">
+        <span>检测能力</span>
+        <strong id="signalCoverage">--</strong>
+      </div>
+      <div class="detail-row">
+        <span>有效交互样本</span>
+        <strong id="interactionCount">--</strong>
+      </div>
+    </details>
+
+    <div class="privacy-note">
+      浏览器缓存容量 ≠ 模型上下文。扩展不读取 HTTP 缓存占用，也不把 JS 内存当作上下文容量。
+    </div>
+
+    <footer>
+      <span>可测量 / 本机估算 / UNKNOWN 严格区分</span>
+      <span>v1.6.1</span>
+    </footer>
+
+    <div id="notice" class="notice hidden">
+      请先打开或刷新 chatgpt.com，再点击扩展图标。
+    </div>
+  </main>
+
+  <script src="core.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
