@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="610" viewBox="0 0 760 610" role="img" aria-labelledby="t d">
+  <title id="t">ChatGPT 页面性能助手详细指标</title>
+  <desc id="d">根据真实扩展界面提取并重排的详细指标示意图</desc>
+  <rect width="760" height="610" rx="28" fill="#111318"/>
+  <text x="42" y="58" fill="#f4f6f8" font-size="28" font-family="system-ui,Segoe UI,Microsoft YaHei,sans-serif" font-weight="700">详细指标</text>
+  <text x="42" y="88" fill="#8f98a7" font-size="16" font-family="system-ui,Segoe UI,Microsoft YaHei,sans-serif">可测量 / 本机估算 / UNKNOWN 严格区分</text>
+  <rect x="32" y="118" width="696" height="430" rx="22" fill="#1a1d23" stroke="#2a2f38"/>
+  <g font-family="system-ui,Segoe UI,Microsoft YaHei,sans-serif" font-size="17">
+    <text x="58" y="164" fill="#aeb6c2">近 90 秒页面压力</text><text x="674" y="164" text-anchor="end" fill="#e5e8ed" font-weight="700">8%</text>
+    <line x1="58" y1="184" x2="674" y2="184" stroke="#272c34"/>
+    <text x="58" y="222" fill="#aeb6c2">屏外渲染覆盖</text><text x="674" y="222" text-anchor="end" fill="#e5e8ed" font-weight="700">92%</text>
+    <line x1="58" y1="242" x2="674" y2="242" stroke="#272c34"/>
+    <text x="58" y="280" fill="#aeb6c2">页面阻塞</text><text x="674" y="280" text-anchor="end" fill="#e5e8ed" font-weight="700">1.9%</text>
+    <line x1="58" y1="300" x2="674" y2="300" stroke="#272c34"/>
+    <text x="58" y="338" fill="#aeb6c2">掉帧情况</text><text x="674" y="338" text-anchor="end" fill="#e5e8ed" font-weight="700">0%</text>
+    <line x1="58" y1="358" x2="674" y2="358" stroke="#272c34"/>
+    <text x="58" y="396" fill="#aeb6c2">交互响应 · 样本</text><text x="674" y="396" text-anchor="end" fill="#e5e8ed" font-weight="700">136 ms</text>
+    <line x1="58" y1="416" x2="674" y2="416" stroke="#272c34"/>
+    <text x="58" y="454" fill="#aeb6c2">页面识别</text><text x="674" y="454" text-anchor="end" fill="#e5e8ed" font-weight="700">兼容模式</text>
+    <line x1="58" y1="474" x2="674" y2="474" stroke="#272c34"/>
+    <text x="58" y="512" fill="#aeb6c2">检测能力</text><text x="674" y="512" text-anchor="end" fill="#7de0af" font-weight="700">4 / 4</text>
+  </g>
+  <text x="32" y="588" fill="#68717f" font-size="13" font-family="system-ui,Segoe UI,Microsoft YaHei,sans-serif">不同机器与浏览器的压力数值不可直接横向比较</text>
+</svg>

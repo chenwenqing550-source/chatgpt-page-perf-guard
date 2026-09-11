@@ -12,10 +12,12 @@
 
 ## 界面预览
 
+> 下图根据真实扩展截图提取关键区域并重新排版，便于 README 阅读；不是逐像素复刻。
+
 <table>
 <tr>
-<td width="50%"><img src="docs/images/popup-overview.png" alt="页面压力、换窗建议、历史深度" width="360"></td>
-<td width="50%"><img src="docs/images/popup-details.png" alt="详细性能指标" width="360"></td>
+<td width="50%"><img src="docs/images/popup-overview.svg" alt="页面压力、换窗建议、历史深度" width="360"></td>
+<td width="50%"><img src="docs/images/popup-details.svg" alt="详细性能指标" width="360"></td>
 </tr>
 </table>
 
