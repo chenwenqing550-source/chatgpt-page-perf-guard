@@ -24,6 +24,19 @@ test('last and recently mutated turns are protected from cold state', () => {
   assert.match(monitor, /COLD_STABLE_MS/);
 });
 
+test('mutation ownership prefers outer conversation article before role fallback', () => {
+  assert.match(monitor, /const primaryTurn = node\.closest\('article\[data-testid\^="conversation-turn-"\]'\)/);
+  assert.match(monitor, /if \(primaryTurn\) return primaryTurn/);
+});
+
+test('mutation inspection work is bounded per observer callback', () => {
+  assert.match(monitor, /Math\.min\(records\.length, 12\)/);
+});
+
+test('diagnostic ring stays within roughly two minutes of periodic samples', () => {
+  assert.match(monitor, /const DIAGNOSTIC_ITEMS = 60/);
+});
+
 test('cold maintenance is gated by quiet layout policy', () => {
   assert.match(monitor, /shouldRunLayoutWork/);
   assert.match(monitor, /maintainColdTurns/);
