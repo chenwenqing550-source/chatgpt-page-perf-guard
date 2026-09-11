@@ -1,58 +1,80 @@
-# Release Checklist — v1.7.0
+# Release Checklist — v1.7.1 Candidate
 
 ## Source / metadata
 
-- [ ] `extension/manifest.json` version = `1.7.0`.
-- [ ] `package.json` version = `1.7.0`.
-- [ ] Popup footer = `v1.7.0`.
-- [ ] README current install guidance only points to v1.7.0.
-- [ ] v1.6.x appears only in historical changelog/release history, not as recommended baseline.
+- [x] `extension/manifest.json` version = `1.7.1`.
+- [x] `package.json` version = `1.7.1`.
+- [x] Popup footer = `v1.7.1`.
+- [x] Manifest permissions are exactly `storage`; no host permission expansion.
+- [x] MV3 background service worker is `background.js` and content script load order places `blackbox.js` before `monitor.js`.
+- [x] README / CHANGELOG label v1.7.1 as a diagnostic candidate and keep real-browser acceptance `PENDING`.
+- [x] v1.7.0 remains the real-browser A/B baseline until candidate acceptance is complete.
 
 ## Static / automated verification
 
-- [ ] `npm test` PASS.
-- [ ] `npm run check` PASS.
-- [ ] Security guard confirms no network, persistent storage, cookie or dynamic-code APIs.
-- [ ] Handoff guard confirms no auto click/submit/KeyboardEvent/window.open.
-- [ ] Lifecycle tests cover background, scrolling, generating, busy, interaction guard and bounded ring buffer.
-- [ ] Render guard confirms only explicit cold turns receive `content-visibility`.
+Fresh CI evidence for head `7f24638826fb996eceac671f05d0957ed86d9c52` before this documentation-only cleanup: run #94, 66/66 tests PASS, syntax check PASS, candidate packaging/upload PASS. Any later commit must receive a new fresh CI result before release claims.
 
-## Browser behavior
+Required gates:
 
-Run in Chrome/Edge with a long ChatGPT conversation:
+- [x] Recorder is bounded and hot append does not use front `shift/splice`.
+- [x] Send/scroll black-box hot path has no storage write, serialization, DOM full scan or forced-layout API.
+- [x] Diagnostics add no fourth recurring monitor timer.
+- [x] LoAF / LongTask / Event Timing metadata forwarding is bounded and metadata-only.
+- [x] `storage.session` checkpoint is per-tab, bounded, re-sanitized and fail-suspending.
+- [x] Cross-refresh restore rebases old wall-clock events into the new performance timeline and preserves chronological ordering.
+- [x] Popup reads black-box status once on open, not in the 2-second polling loop.
+- [x] Popup export serializes only on explicit user action and needs no downloads permission.
+- [x] Security guard confirms no network telemetry, persistent extension storage, chat-text capture, cookie or dynamic-code APIs.
+- [x] Handoff guard confirms no auto click/submit/KeyboardEvent/window.open.
+- [x] Existing lifecycle/render guards for v1.7.0 cold-turn optimization remain passing.
 
-- [ ] Send a message while the page is already long: extension enters protection/busy state immediately.
-- [ ] During answer generation and tool-card growth: active probe shows “已让路”.
-- [ ] Generate while rapidly scrolling: no bulk coverage/layout scan is triggered.
-- [ ] Last two turns and currently growing turn never receive cold optimization.
-- [ ] A far historical turn only becomes cold after it is confirmed outside the preheat area and stable.
-- [ ] Returning near viewport preheats/removes cold state before the content reaches the visible region.
-- [ ] Background tab stops nonessential active work.
-- [ ] Recent incident/self-work diagnostics contain numbers/status only, no chat body.
+## Real-browser diagnostic behavior — PENDING
 
-## A/B acceptance against previous public build
+Run in Chrome/Edge/Brave with the same long ChatGPT conversation used for the v1.7.0 baseline:
 
-Use the same long conversation and similar interaction sequence:
+- [ ] Popup black-box card loads without noticeable UI lag.
+- [ ] Sending with Enter creates a send marker; Shift+Enter does not create a false send marker.
+- [ ] “标记刚才卡顿” works after a recovered freeze.
+- [ ] “导出最近发送现场” produces a metadata-only JSON around the last send event.
+- [ ] “导出最近10分钟” produces bounded history without chat text.
+- [ ] During answer generation/tool-card growth, active probe remains in the expected self-yielding state.
+- [ ] Long streaming output alone does not cause a new regression compared with v1.7.0.
+- [ ] If a freeze occurs, record whether dragging the right page scrollbar recovers it and export evidence immediately after recovery.
+- [ ] After a successful quiet checkpoint, refresh/reload restores earlier evidence; explicitly verify that events after the last checkpoint can still be absent.
+- [ ] Background tab does not run nonessential layout work or session checkpoint.
 
-- [ ] Compare “send moment” jank.
+## Performance A/B acceptance against v1.7.0 — PENDING
+
+Use the same long conversation, similar viewport, similar interaction sequence and comparable output duration:
+
+- [ ] Compare send-moment jank / clustered Forced Reflow.
 - [ ] Compare generation/tool-card jank.
-- [ ] Compare fast-scroll jank.
-- [ ] Compare whether refresh is still required to restore smoothness.
-- [ ] Confirm v1.7.0 does not introduce scroll jumps or missing content.
+- [ ] Compare fast-scroll jank and scroll-anchor behavior.
+- [ ] Compare extension `selfWorkMs` and whether black-box capture changes perceived responsiveness.
+- [ ] Confirm no new scroll jumps, missing content or delayed viewport preheat.
+- [ ] Confirm v1.7.1 does not perform measurably worse than v1.7.0 before removing Draft status.
 
-Do not call the performance change proven until real-browser A/B evidence exists.
+Do **not** call the intermittent freeze fixed solely from CI. Browser acceptance requires real A/B evidence.
+
+## Privacy / checkpoint boundary
+
+- [ ] Exported JSON contains no chat/prompt/assistant text, DOM HTML, clipboard or network payload.
+- [ ] Only `storage.session` is used; no `storage.local` / `storage.sync` fallback.
+- [ ] Session data is understood as recoverable diagnostic aid, not permanent logging.
+- [ ] Test refresh/reload and extension reload separately; extension reload/update may clear session diagnostics.
 
 ## Handoff
 
-- [ ] “准备换窗交接” fills the composer only.
-- [ ] It never sends automatically.
-- [ ] Prompt includes CURRENT/VERIFIED/PENDING/BLOCKED/HISTORICAL/REJECTED.
-- [ ] Prompt protects repo/branch/exact SHA/version/test result/next step/Stop Rule.
-- [ ] Handoff is described as new-window transfer, not server-side context compression.
+- [x] “准备换窗交接” fills the composer only.
+- [x] It never sends automatically.
+- [x] Prompt includes CURRENT/VERIFIED/PENDING/BLOCKED/HISTORICAL/REJECTED.
+- [x] Prompt protects repo/branch/exact SHA/version/test result/next step/Stop Rule.
+- [x] Handoff is described as new-window transfer, not server-side context compression.
 
 ## Release surface
 
-- [ ] Merge verified candidate to `main`.
-- [ ] Publish v1.7.0 package/release.
-- [ ] Only after v1.7.0 is available, mark/remove v1.6.1 public release from the recommended surface.
+- [ ] Keep PR #5 Draft while browser A/B is PENDING.
+- [ ] Attach/use the CI `chatgpt-page-perf-guard-v1.7.1-candidate` artifact for browser testing.
+- [ ] Update Issue #4 with each real freeze export and A/B conclusion.
+- [ ] Merge to `main` only after normalized browser evidence confirms no regression.
 - [ ] Never delete Git history needed for audit/recovery.
