@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT 页面性能助手",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "description": "本机检测 ChatGPT 页面压力；繁忙时主动让路，只冷却稳定远屏历史消息，并提供会话级诊断黑匣子与安全换窗交接。模型上下文不可验证时始终显示 UNKNOWN。零联网、零遥测。",
   "permissions": [
     "storage"

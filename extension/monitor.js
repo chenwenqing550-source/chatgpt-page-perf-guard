@@ -64,6 +64,7 @@
   let activityState = "quiet";
   let activeProbeSuppressed = true;
   let turnObserver = null;
+  let turnSizeObserver = null;
 
   const blockingSamples = [];
   const frameSamples = [];
@@ -75,6 +76,8 @@
   const trackedTurns = new Set();
   const turnNearState = new WeakMap();
   const turnMutationAt = new WeakMap();
+  const turnSizes = new WeakMap();
+  const turnSizeInvalidated = new WeakSet();
 
   let latest = {
     pagePressure: null,
@@ -308,7 +311,7 @@
 
   function clearColdState() {
     for (const node of trackedTurns) {
-      if (node && node.removeAttribute) node.removeAttribute("data-cgpt-perf-cold");
+      if (node && node.removeAttribute) releaseColdTurn(node);
     }
   }
 
@@ -332,9 +335,9 @@
           const node = entry.target;
           const isNear = Boolean(entry.isIntersecting);
           turnNearState.set(node, isNear);
-          if (isNear && node && node.removeAttribute) {
-            node.removeAttribute("data-cgpt-perf-cold");
-          }
+          // The browser renders relevant content under content-visibility:auto.
+          // Removing containment here discards its remembered size during scroll.
+          // Keep this hot observer callback free of DOM writes.
         }
       }, {
         root: null,
@@ -346,6 +349,44 @@
     }
 
     return turnObserver;
+  }
+
+  function releaseColdTurn(node) {
+    node.removeAttribute("data-cgpt-perf-cold");
+    if (node.style) node.style.removeProperty("--cgpt-perf-block-size");
+  }
+
+  function ensureTurnSizeObserver() {
+    if (turnSizeObserver || typeof ResizeObserver !== "function") return turnSizeObserver;
+    try {
+      turnSizeObserver = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const node = entry.target;
+          const rect = entry.contentRect;
+          if (!node || !rect) continue;
+          const width = Number(rect.width);
+          const height = Number(rect.height);
+          if (node.getAttribute("data-cgpt-perf-cold") === "on") {
+            // A skipped subtree reports its placeholder, not a new natural size.
+            // Width changes can invalidate wrapping; release only on the quiet path.
+            const previous = turnSizes.get(node);
+            if (!previous || !Number.isFinite(width) || Math.abs(previous.width - width) > 0.5) {
+              turnSizeInvalidated.add(node);
+            }
+            continue;
+          }
+          if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
+            turnSizes.set(node, { width, height });
+            turnSizeInvalidated.delete(node);
+          } else {
+            turnSizes.delete(node);
+          }
+        }
+      });
+    } catch (_) {
+      turnSizeObserver = null;
+    }
+    return turnSizeObserver;
   }
 
   function closestTurn(target) {
@@ -447,7 +488,7 @@
           const turn = closestTurn(records[i].target);
           if (turn) {
             turnMutationAt.set(turn, now);
-            if (turn.removeAttribute) turn.removeAttribute("data-cgpt-perf-cold");
+            if (turn.hasAttribute && turn.hasAttribute("data-cgpt-perf-cold")) releaseColdTurn(turn);
           }
         }
 
@@ -541,7 +582,8 @@
     if (now - lastColdMaintenanceAt < COLD_MAINTENANCE_EVERY_MS) return coverageEstimate;
 
     const observer = ensureTurnObserver();
-    if (!observer) {
+    const sizeObserver = ensureTurnSizeObserver();
+    if (!observer || !sizeObserver) {
       coverageEstimate = null;
       return coverageEstimate;
     }
@@ -554,6 +596,7 @@
       if (!tracked || tracked.isConnected === false) {
         trackedTurns.delete(tracked);
         try { observer.unobserve(tracked); } catch (_) {}
+        try { sizeObserver.unobserve(tracked); } catch (_) {}
       }
     }
 
@@ -562,6 +605,7 @@
         trackedTurns.add(node);
         turnMutationAt.set(node, now);
         try { observer.observe(node); } catch (_) {}
+        try { sizeObserver.observe(node); } catch (_) {}
       }
     }
 
@@ -570,21 +614,33 @@
 
     for (const node of nodes) {
       const nearState = turnNearState.get(node);
+      const isCold = node.getAttribute("data-cgpt-perf-cold") === "on";
+      const size = turnSizes.get(node);
+      if (turnSizeInvalidated.has(node)) {
+        releaseColdTurn(node);
+        turnSizes.delete(node);
+        turnSizeInvalidated.delete(node);
+        continue;
+      }
       const mutatedAt = turnMutationAt.get(node);
       const recentlyMutated = Number.isFinite(mutatedAt) && now - mutatedAt < COLD_STABLE_MS;
       const canCool =
         optimizationEnabled &&
-        nearState === false &&
+        Boolean(size) &&
+        (isCold || nearState === false) &&
         !lastProtected.has(node) &&
         !recentlyMutated;
 
       if (canCool) {
-        if (node.getAttribute("data-cgpt-perf-cold") !== "on") {
+        if (!isCold) {
+          // Seed with observed natural content size before enabling containment.
+          // No synchronous geometry read, fixed 720px guess, or scroll compensation.
+          node.style.setProperty("--cgpt-perf-block-size", `${size.height}px`);
           node.setAttribute("data-cgpt-perf-cold", "on");
         }
         coldCount += 1;
-      } else if (node.hasAttribute("data-cgpt-perf-cold")) {
-        node.removeAttribute("data-cgpt-perf-cold");
+      } else if (isCold) {
+        releaseColdTurn(node);
       }
     }
 

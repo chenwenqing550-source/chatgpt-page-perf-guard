@@ -2,6 +2,21 @@
 
 遵循 Semantic Versioning。
 
+## [1.7.2] - 2026-09-12
+
+### Fixed
+
+- 冷却前使用 ResizeObserver 已提供的自然内容高度，不再用 720px / 640px 猜测占位，避免改变滚动范围。
+- IntersectionObserver 回调不再移除冷却属性；由 content-visibility:auto 自动呈现相关内容，保留 remembered size，减少滚动期间反复重建布局。
+- 缺测量能力或有效尺寸时不冷却；宽度改变在 quiet 阶段失效重测；关闭优化清理尺寸属性，断开节点释放两个观察器。
+- 新增滚动几何行为回归；原 12 个定向场景中修复前 8 失败，修复后 12 通过。
+
+### Evidence / Status
+
+- Chromium 合成页面（25 条可变长度消息、嵌套滚动容器）：旧版高度 44,425 → 22,897px，修复后保持 44,425px；滚动后仍保持。
+- 这不是用户 Windows 的性能录制，也不能证明所有卡屏的唯一根因。实机归一化 A/B 仍 PENDING。
+- 保留诊断黑匣子、session checkpoint、隐私边界和原验证债务；不因定向修复宣称完美解决，不自动合并 main 或发布 Stable。
+
 ## [1.7.1] - 2026-09-12
 
 ### Added
